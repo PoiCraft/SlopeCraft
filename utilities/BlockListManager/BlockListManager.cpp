@@ -1,385 +1,347 @@
-/*
- Copyright © 2021-2023  TokiNoBug
-This file is part of SlopeCraft.
 
-    SlopeCraft is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    SlopeCraft is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with SlopeCraft. If not, see <https://www.gnu.org/licenses/>.
-
-    Contact with me:
-    github:https://github.com/SlopeCraft/SlopeCraft
-    bilibili:https://space.bilibili.com/351429231
-*/
-
+#include <string_view>
+#include <QMessageBox>
+#include <QDir>
+#include <boost/uuid/detail/md5.hpp>
 #include "BlockListManager.h"
-#include "TokiBaseColor.h"
-#include "TokiBlock.h"
-#include <QJsonDocument>
-#include <QJsonArray>
-#include <iostream>
-#include <SlopeCraftL.h>
 
-BlockListManager::BlockListManager(QHBoxLayout *_area, QObject *parent)
-    : QObject(parent) {
-  isApplyingPreset = false;
-  area = _area;
-  qDebug() << ((area == nullptr) ? " 错误！_area 为空指针" : "");
-  QGroupBox *qgb = nullptr;
-  QGridLayout *qgl = nullptr;
-  TokiBaseColor *tbc = nullptr;
-  tbcs.clear();
-  // qDebug("方块列表管理者开始创建 QGroupBox");
-  for (uchar baseColor = 0; baseColor < 64; baseColor++) {
-    if (baseColorNames[baseColor].isEmpty()) break;
-    qgb = new QGroupBox(baseColorNames[baseColor]);
-    // qDebug("create QGroupBox");
-    qgl = new QGridLayout;
-    qgb->setLayout(qgl);
-    // qDebug("create Layout");
-    tbc = new TokiBaseColor(baseColor, qgl);
-    // qDebug("create TokiBaseColor");
-    area->addWidget(qgb);
-    // qDebug("add QGroupBox to layout");
-    tbcs.push_back(tbc);
+extern const std::string_view basecolor_names[64];
 
-    connect(this, &BlockListManager::translate, tbc, &TokiBaseColor::translate);
-    connect(tbc, &TokiBaseColor::userClicked, this,
-            &BlockListManager::receiveClicked);
+BlockListManager::BlockListManager(QWidget *parent) : QWidget(parent) {}
+
+BlockListManager::~BlockListManager() {}
+
+void BlockListManager::setup_basecolors() noexcept {
+  this->basecolor_widgets.clear();
+  this->basecolor_widgets.reserve(64);
+  const int max_basecolor = SlopeCraft::SCL_maxBaseColor();
+
+  uint32_t bc_arr[64];
+
+  SlopeCraft::SCL_get_base_color_ARGB32(bc_arr);
+
+  for (int bc = 0; bc <= max_basecolor; bc++) {
+    std::unique_ptr<BaseColorWidget> bcw{new BaseColorWidget(this, bc)};
+    this->layout()->addWidget(bcw.get());
+    bcw->setTitle(QString::fromUtf8(basecolor_names[bc].data()));
+    bcw->set_color(bc_arr[bc]);
+
+    connect(bcw.get(), &BaseColorWidget::changed,
+            [this]() { emit this->changed(); });
+    this->basecolor_widgets.push_back(std::move(bcw));
   }
-  // qDebug("Manager 构造函数完毕");
 }
 
-BlockListManager::~BlockListManager() {
-  for (uchar i = 0; i < tbcs.size(); i++) delete tbcs[i];
-}
-
-void BlockListManager::setVersion(uchar _ver) {
-  if (_ver < 12 || _ver > SlopeCraft::SCL_maxAvailableVersion()) return;
-  TokiBaseColor::mcVer = _ver;
-  for (uchar i = 0; i < tbcs.size(); i++) tbcs[i]->versionCheck();
-}
-
-bool callback_load_image(const char *filename, uint32_t *dst_row_major) {
-  QImage img(QString::fromLocal8Bit(filename));
-
-  if (img.isNull()) {
-    return false;
+uint64_t std::hash<selection>::operator()(const selection &s) const noexcept {
+  boost::uuids::detail::md5 hash;
+  for (auto &id : s.ids) {
+    hash.process_bytes(id.data(), id.size());
   }
 
-  QImage another = img.convertedTo(QImage::Format_ARGB32).scaled(16, 16);
-
-  memcpy(dst_row_major, another.scanLine(0), 16 * 16 * sizeof(uint32_t));
-  return true;
+  uint32_t dig[4]{};
+  hash.get_digest(reinterpret_cast<decltype(hash)::digest_type &>(dig));
+  uint64_t fold = 0;
+  for (size_t i = 0; i < 2; i++) {
+    const uint64_t cur =
+        (uint64_t(dig[2 * i]) << 32) | (uint64_t(dig[2 * i + 1]));
+    fold ^= cur;
+  }
+  return fold;
 }
 
-bool BlockListManager::setupFixedBlockList(const QString &filename,
-                                           const QString &imgdir) noexcept {
-  return this->impl_setupBlockList(filename, imgdir, this->BL_fixed);
-}
-bool BlockListManager::setupCustomBlockList(const QString &filename,
-                                            const QString &imgdir) noexcept {
-  return this->impl_setupBlockList(filename, imgdir, this->BL_custom);
-}
+// bool callback_load_image(const char *filename, uint32_t *dst_row_major) {
+//   QImage img(QString::fromLocal8Bit(filename));
+//
+//   if (img.isNull()) {
+//     return false;
+//   }
+//
+//   QImage another = img.convertedTo(QImage::Format_ARGB32).scaled(16, 16);
+//
+//   memcpy(dst_row_major, another.scanLine(0), 16 * 16 * sizeof(uint32_t));
+//   return true;
+// }
 
-bool BlockListManager::impl_setupBlockList(
-    const QString &filename, const QString &dirname,
-    std::unique_ptr<SlopeCraft::BlockListInterface, BlockListDeleter>
-        &dst) noexcept {
+std::unique_ptr<SlopeCraft::block_list_interface, BlockListDeleter>
+BlockListManager::impl_addblocklist(const char *filename) noexcept {
   std::string errmsg;
-  errmsg.resize(4096);
-  SlopeCraft::blockListOption opt;
-  opt.errmsg = errmsg.data();
-  opt.errmsg_capacity = errmsg.size();
-  size_t msg_len{0};
-  opt.errmsg_len_dest = &msg_len;
+  errmsg.resize(8192);
+  auto sd_err = SlopeCraft::string_deliver::from_string(errmsg);
+  std::string warning;
+  warning.resize(8192);
+  auto sd_warn = SlopeCraft::string_deliver::from_string(warning);
+  SlopeCraft::block_list_create_info option{SC_VERSION_U64, &sd_warn, &sd_err};
 
-  auto img_dir_local8bit = dirname.toLocal8Bit();
-  opt.image_dir = img_dir_local8bit.data();
+  SlopeCraft::block_list_interface *bli =
+      SlopeCraft::SCL_create_block_list(filename, option);
 
-  opt.callback_load_image = callback_load_image;
+  errmsg.resize(sd_err.size);
+  warning.resize(sd_warn.size);
 
-  SlopeCraft::BlockListInterface *bli =
-      SlopeCraft::SCL_createBlockList(filename.toLocal8Bit().data(), opt);
-
-  errmsg.resize(msg_len);
-
-  if (!errmsg.empty()) {
+  if (not errmsg.empty()) {
+    errmsg.append(QStringLiteral("\npwd: %1")
+                      .arg(QFileInfo{"."}.absolutePath())
+                      .toLocal8Bit());
     if (bli == nullptr) {
       QMessageBox::critical(dynamic_cast<QWidget *>(this->parent()),
                             tr("解析方块列表失败"),
                             QString::fromUtf8(errmsg.data()));
-      return false;
+      return {nullptr};
     } else {
       QMessageBox::warning(dynamic_cast<QWidget *>(this->parent()),
-                           tr("解析方块列表失败"),
-                           QString::fromUtf8(errmsg.data()));
+                           tr("解析方块列表成功，但出现警告"),
+                           QString::fromUtf8(warning.data()));
     }
   }
-  dst.reset(bli);
 
-  std::vector<SlopeCraft::AbstractBlock *> blockps;
-  std::vector<uint8_t> basecolors;
-  basecolors.resize(dst->size());
-  blockps.resize(dst->size());
+  std::vector<SlopeCraft::mc_block_interface *> blockps;
+  std::vector<uint8_t> base_colors;
+  base_colors.resize(bli->size());
+  blockps.resize(bli->size());
 
-  dst->get_blocks(blockps.data(), basecolors.data(), blockps.size());
+  const size_t size_2 =
+      bli->get_blocks(blockps.data(), base_colors.data(), blockps.size());
+  assert(size_2 == base_colors.size() and base_colors.size() == blockps.size());
 
-  for (size_t idx = 0; idx < dst->size(); idx++) {
-    this->tbcs[basecolors[idx]]->addTokiBlock(blockps[idx]);
+  for (size_t idx = 0; idx < bli->size(); idx++) {
+    this->basecolor_widgets[base_colors[idx]]->add_block(blockps[idx]);
   }
-  return true;
+
+  return std::unique_ptr<SlopeCraft::block_list_interface, BlockListDeleter>{
+      bli};
 }
 
-void BlockListManager::setSelected(uchar baseColor, ushort blockSeq) {
-  isApplyingPreset = true;
-  tbcs[baseColor]->setSelected(blockSeq);
-  isApplyingPreset = false;
-}
-
-void BlockListManager::setEnabled(uchar baseColor, bool isEnable) {
-  isApplyingPreset = true;
-  tbcs[baseColor]->checkBox->setChecked(isEnable);
-  isApplyingPreset = false;
-}
-
-void BlockListManager::receiveClicked() const {
-  if (isApplyingPreset) return;
-  emit switchToCustom();
-  emit blockListChanged();
-}
-
-void BlockListManager::setLabelColors(const QRgb *colors) {
-  for (uchar i = 0; i < tbcs.size(); i++) tbcs[i]->makeLabel(colors[i]);
-}
-
-void BlockListManager::getEnableList(bool *dest) const {
-  for (uchar i = 0; i < tbcs.size(); i++) dest[i] = tbcs[i]->getEnabled();
-}
-
-void BlockListManager::getSimpleBlockList(
-    const SlopeCraft::AbstractBlock **SBL) const {
-  // qDebug("void BlockListManager::getSimpleBlockList(simpleBlock * SBL)
-  // const");
-
-  for (uchar i = 0; i < 64; i++) {
-    SBL[i] = nullptr;
-  }
-  for (uchar i = 0; i < tbcs.size(); i++) {
-    SBL[i] = (tbcs[i]->getTokiBlock()->getSimpleBlock());
-  }
-}
-std::vector<const SlopeCraft::AbstractBlock *>
-BlockListManager::getSimpleBlockList() const {
-  std::vector<const SlopeCraft::AbstractBlock *> SBL(64);
-  const SlopeCraft::AbstractBlock *p;
-  for (uchar i = 0; i < tbcs.size(); i++) {
-    p = tbcs[i]->getTokiBlock()->getSimpleBlock();
-    SBL[i] = p;
-  }
-  return SBL;
-}
-std::vector<const TokiBlock *> BlockListManager::getTokiBlockList() const {
-  std::vector<const TokiBlock *> TBL(64);
-  for (uchar i = 0; i < 64; i++) {
-    if (i < tbcs.size())
-      TBL[i] = tbcs[i]->getTokiBlock();
-    else
-      TBL[i] = nullptr;
-  }
-  return TBL;
-}
-
-std::vector<const QRadioButton *> BlockListManager::getQRadioButtonList()
-    const {
-  std::vector<const QRadioButton *> TBL(64);
-  for (uchar i = 0; i < 64; i++) {
-    if (i < tbcs.size())
-      TBL[i] = tbcs[i]->getTokiBlock()->getTarget();
-    else
-      TBL[i] = nullptr;
-  }
-  return TBL;
-}
-
-std::vector<ushort> BlockListManager::toPreset() const {
-  std::vector<ushort> TBL(64);
-  for (uchar i = 0; i < 64; i++) {
-    if (i < tbcs.size())
-      TBL[i] = tbcs[i]->getSelected();
-    else
-      TBL[i] = 0;
-  }
-  return TBL;
-}
-
-bool isValidBlockInfo(const QJsonObject &json) {
-  return (json.contains("id") && json.contains("nameZH") &&
-          json.contains("nameEN") && json.contains("baseColor"));
-}
-
-void BlockListManager::getTokiBaseColors(
-    std::vector<const TokiBaseColor *> *dest) const {
-  dest->clear();
-  dest->reserve(tbcs.size());
-  for (const auto it : tbcs) {
-    dest->emplace_back(it);
-  }
-}
-
-int BlockListManager::getBlockNum() const {
-  int result = 0;
-  for (auto it : tbcs) {
-    result += it->tbs.size();
-  }
-  return result;
-}
-
-void BlockListManager::getBlockPtrs(const SlopeCraft::AbstractBlock **dest,
-                                    uint8_t *baseColor) const {
-  int idx = 0;
-  for (auto it : tbcs) {
-    for (auto jt : it->tbs) {
-      baseColor[idx] = it->baseColor;
-      dest[idx] = jt->getSimpleBlock();
-      idx++;
+bool BlockListManager::add_blocklist(QString filename) noexcept {
+  const QString name = QFileInfo{filename}.fileName();
+  for (auto &[bl_name, _] : this->blockslists) {
+    if (bl_name == name) {
+      QMessageBox::warning(
+          this, tr("无法加载方块列表"),
+          tr("名为 %1 的方块列表已经加载，不允许加载同名的方块列表。")
+              .arg(bl_name));
+      return false;
     }
   }
-  dest[idx] = nullptr;
+  // Test for multiple encodings
+  for (auto &encoding : {filename.toLocal8Bit(), filename.toUtf8()}) {
+    std::unique_ptr<SlopeCraft::block_list_interface, BlockListDeleter> tmp =
+        this->impl_addblocklist(encoding.data());
+
+    if (not tmp) {
+      continue;
+    }
+
+    this->blockslists.emplace_back(name, std::move(tmp));
+    return true;
+  }
+
+  return false;
 }
 
-bool BlockListManager::loadPreset(const blockListPreset &preset) {
-  if (preset.values.size() != this->tbcs.size()) {
+void BlockListManager::finish_blocklist() noexcept {
+  for (auto &bcw : this->basecolor_widgets) {
+    bcw->finish_blocks();
+  }
+}
+
+tl::expected<size_t, QString> BlockListManager::remove_blocklist(
+    QString blocklist_name) noexcept {
+  const SlopeCraft::block_list_interface *bl = nullptr;
+  auto it_removed = this->blockslists.end();
+  {
+    QString loaded_names;
+    for (auto it = this->blockslists.begin(); it not_eq this->blockslists.end();
+         ++it) {
+      auto &name = it->first;
+      loaded_names.append(name);
+      loaded_names.push_back(",");
+      if (name == blocklist_name) {
+        bl = it->second.get();
+        it_removed = it;
+        break;
+      }
+    }
+    if (bl == nullptr) {
+      return tl::make_unexpected(
+          tr("无法删除方块列表 \"%1\"，没有加载同名的方块列表。已加载：%2")
+              .arg(blocklist_name, loaded_names));
+    }
+  }
+  size_t removed_counter = 0;
+  for (auto &bcw : this->basecolor_widgets) {
+    auto res = bcw->remove_blocks(
+        [bl](const SlopeCraft::mc_block_interface *blk) -> bool {
+          return bl->contains(blk);
+        });
+    if (not res) {
+      return tl::make_unexpected(std::move(res.error()));
+    }
+    removed_counter += res.value();
+  }
+  this->blockslists.erase(it_removed);
+
+  return removed_counter;
+}
+
+void BlockListManager::when_version_updated() noexcept {
+  for (auto &bcw : this->basecolor_widgets) {
+    bcw->when_version_updated(this->callback_get_version());
+  }
+}
+
+void BlockListManager::get_blocklist(
+    std::vector<uint8_t> &enable_list,
+    std::vector<const SlopeCraft::mc_block_interface *> &block_list)
+    const noexcept {
+  enable_list.resize(64);
+  block_list.resize(64);
+
+  for (int bc = 0; bc < (int)this->basecolor_widgets.size(); bc++) {
+    enable_list[bc] = this->basecolor_widgets[bc]->is_enabled();
+    block_list[bc] = this->basecolor_widgets[bc]->selected_block();
+  }
+
+  for (int bc = (int)this->basecolor_widgets.size(); bc < 64; bc++) {
+    enable_list[bc] = 0;
+    block_list[bc] = nullptr;
+  }
+}
+
+bool BlockListManager::loadPreset(const blockListPreset &preset) noexcept {
+  if (preset.values.size() != this->basecolor_widgets.size()) {
     QMessageBox::warning(dynamic_cast<QWidget *>(this->parent()),
                          tr("加载预设错误"),
                          tr("预设文件包含的基色数量 (%1) 与实际情况 (%2) 不符")
                              .arg(preset.values.size())
-                             .arg(this->tbcs.size()));
+                             .arg(this->basecolor_widgets.size()));
     return false;
   }
 
-  std::vector<const TokiBlock *> blocks_arr;
+  for (int bc = 0; bc < (int)preset.values.size(); bc++) {
+    auto &bcw = this->basecolor_widgets[bc];
 
-  for (size_t basecolor = 0; basecolor < this->tbcs.size(); basecolor++) {
-    auto tbc = this->tbcs[basecolor];
-    const auto &pre = preset.values[basecolor];
+    bcw->set_enabled(preset.values[bc].first);
 
-    this->setEnabled(basecolor, pre.first);
-
-    // find block
-    int matched_block_idx = -1;
-    blocks_arr.clear();
-    tbc->getTokiBlockList(blocks_arr);
-    for (int bidx = 0; bidx < (int)blocks_arr.size(); bidx++) {
-      const char *const blkid = blocks_arr[bidx]->getSimpleBlock()->getId();
-      if (QString::fromUtf8(blkid) == pre.second) {
-        matched_block_idx = bidx;
+    auto &bws = bcw->block_widgets();
+    int matched_idx = -1;
+    for (int idx = 0; idx < (int)bws.size(); idx++) {
+      if (QString::fromLatin1(bws[idx]->attached_block()->getId()) ==
+          preset.values[bc].second) {
+        matched_idx = idx;
         break;
       }
     }
 
-    if (matched_block_idx < 0) {
-      QMessageBox::warning(
+    if (matched_idx < 0) {
+      auto ret = QMessageBox::warning(
           dynamic_cast<QWidget *>(this->parent()), tr("加载预设错误"),
           tr("预设中为基色%1指定的方块 id 是\"%2\"，没有找到这个方块 id")
-              .arg(basecolor)
-              .arg(pre.second));
-      return false;
+              .arg(bc)
+              .arg(preset.values[bc].second),
+          QMessageBox::StandardButtons{QMessageBox::StandardButton::Ignore,
+                                       QMessageBox::StandardButton::Close});
+      if (ret == QMessageBox::StandardButton::Close) {
+        exit(__LINE__);
+        // return false;
+      }
+      continue;
     }
 
-    this->setSelected(basecolor, matched_block_idx);
+    bcw->select_block_soft(matched_idx);
   }
 
-  emit blockListChanged();
+  // emit this->changed();
 
   return true;
 }
 
-bool BlockListManager::loadInternalPreset(
-    const blockListPreset &preset) noexcept {
-  return this->loadPreset(preset);
-}
-
-blockListPreset BlockListManager::currentPreset() const noexcept {
+blockListPreset BlockListManager::to_preset() const noexcept {
   blockListPreset ret;
-  ret.values.resize(this->tbcs.size());
-  for (size_t basecolor = 0; basecolor < this->tbcs.size(); basecolor++) {
-    ret.values[basecolor].first = this->tbcs[basecolor]->getEnabled();
+  ret.values.resize(this->basecolor_widgets.size());
+  for (size_t basecolor = 0; basecolor < this->basecolor_widgets.size();
+       basecolor++) {
+    ret.values[basecolor].first =
+        this->basecolor_widgets[basecolor]->is_enabled();
     ret.values[basecolor].second = QString::fromUtf8(
-        this->tbcs[basecolor]->getTokiBlock()->getSimpleBlock()->getId());
+        this->basecolor_widgets[basecolor]->selected_block()->getId());
   }
   return ret;
 }
 
-const QString BlockListManager::baseColorNames[64] = {"00 None",
-                                                      "01 Grass",
-                                                      "02 Sand",
-                                                      "03 Wool",
-                                                      "04 Fire",
-                                                      "05 Ice",
-                                                      "06 Metal",
-                                                      "07 Plant",
-                                                      "08 Snow",
-                                                      "09 Clay",
-                                                      "10 Dirt",
-                                                      "11 Stone",
-                                                      "12 Water",
-                                                      "13 Wood",
-                                                      "14 Quartz",
-                                                      "15 ColorOrange",
-                                                      "16 ColorMagenta",
-                                                      "17 ColorLightBlue",
-                                                      "18 ColorYellow",
-                                                      "19 ColorLime",
-                                                      "20 ColorPink",
-                                                      "21 ColorGray",
-                                                      "22 ColorLightGray",
-                                                      "23 ColorCyan",
-                                                      "24 ColorPurple",
-                                                      "25 ColorBlue",
-                                                      "26 ColorBrown",
-                                                      "27 ColorGreen",
-                                                      "28 ColorRed",
-                                                      "29 ColorBlack",
-                                                      "30 Gold",
-                                                      "31 Diamond",
-                                                      "32 Lapis",
-                                                      "33 Emerald",
-                                                      "34 Podzol",
-                                                      "35 Nether",
-                                                      "36 TerracottaWhite",
-                                                      "37 TerracottaOrange",
-                                                      "38 TerracottaMagenta",
-                                                      "39 TerracottaLightBlue",
-                                                      "40 TerracottaYellow",
-                                                      "41 TerracottaLime",
-                                                      "42 TerracottaPink",
-                                                      "43 TerracottaGray",
-                                                      "44 TerracottaLightGray",
-                                                      "45 TerracottaCyan",
-                                                      "46 TerracottaPurple",
-                                                      "47 TerracottaBlue",
-                                                      "48 TerracottaBrown",
-                                                      "49 TerracottaGreen",
-                                                      "50 TerracottaRed",
-                                                      "51 TerracottaBlack",
-                                                      "52 CrimsonNylium",
-                                                      "53 CrimsonStem",
-                                                      "54 CrimsonHyphae",
-                                                      "55 WarpedNylium",
-                                                      "56 WarpedStem",
-                                                      "57 WarpedHyphae",
-                                                      "58 WarpedWartBlock",
-                                                      "59 Deepslate",
-                                                      "60 RawIron",
-                                                      "61 GlowLichen",
-                                                      "",
-                                                      ""};
+selection BlockListManager::current_selection() const noexcept {
+  std::vector<std::string> ret;
+  ret.reserve(64);
+  for (auto &bcw : this->basecolor_widgets) {
+    if (bcw->is_enabled()) {
+      ret.emplace_back(bcw->selected_block()->getId());
+    } else {
+      ret.emplace_back("");
+    }
+  }
+  return selection{ret};
+}
+
+const std::string_view basecolor_names[64] = {"00 None",
+                                              "01 Grass",
+                                              "02 Sand",
+                                              "03 Wool",
+                                              "04 Fire",
+                                              "05 Ice",
+                                              "06 Metal",
+                                              "07 Plant",
+                                              "08 Snow",
+                                              "09 Clay",
+                                              "10 Dirt",
+                                              "11 Stone",
+                                              "12 Water",
+                                              "13 Wood",
+                                              "14 Quartz",
+                                              "15 ColorOrange",
+                                              "16 ColorMagenta",
+                                              "17 ColorLightBlue",
+                                              "18 ColorYellow",
+                                              "19 ColorLime",
+                                              "20 ColorPink",
+                                              "21 ColorGray",
+                                              "22 ColorLightGray",
+                                              "23 ColorCyan",
+                                              "24 ColorPurple",
+                                              "25 ColorBlue",
+                                              "26 ColorBrown",
+                                              "27 ColorGreen",
+                                              "28 ColorRed",
+                                              "29 ColorBlack",
+                                              "30 Gold",
+                                              "31 Diamond",
+                                              "32 Lapis",
+                                              "33 Emerald",
+                                              "34 Podzol",
+                                              "35 Nether",
+                                              "36 TerracottaWhite",
+                                              "37 TerracottaOrange",
+                                              "38 TerracottaMagenta",
+                                              "39 TerracottaLightBlue",
+                                              "40 TerracottaYellow",
+                                              "41 TerracottaLime",
+                                              "42 TerracottaPink",
+                                              "43 TerracottaGray",
+                                              "44 TerracottaLightGray",
+                                              "45 TerracottaCyan",
+                                              "46 TerracottaPurple",
+                                              "47 TerracottaBlue",
+                                              "48 TerracottaBrown",
+                                              "49 TerracottaGreen",
+                                              "50 TerracottaRed",
+                                              "51 TerracottaBlack",
+                                              "52 CrimsonNylium",
+                                              "53 CrimsonStem",
+                                              "54 CrimsonHyphae",
+                                              "55 WarpedNylium",
+                                              "56 WarpedStem",
+                                              "57 WarpedHyphae",
+                                              "58 WarpedWartBlock",
+                                              "59 Deepslate",
+                                              "60 RawIron",
+                                              "61 GlowLichen",
+                                              "Unknown",
+                                              "Unknown"};

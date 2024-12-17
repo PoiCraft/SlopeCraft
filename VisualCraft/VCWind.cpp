@@ -28,7 +28,7 @@ This file is part of SlopeCraft.
 #include <QMessageBox>
 #include <iostream>
 #include <magic_enum.hpp>
-
+#include <QByteArrayView>
 #include "VC_block_class.h"
 #include "ui_VCWind.h"
 
@@ -90,7 +90,8 @@ void VCWind::callback_progress_range_add(void *__w, int delta) noexcept {
 // utilitiy functions
 void VCWind::append_default_to_rp_or_bsl(QListWidget *qlw,
                                          bool is_rp) noexcept {
-  const QString txt = is_rp ? VCWind::tr("原版资源包") : VCWind::tr("原版json");
+  const QString txt =
+      is_rp ? VCWind::tr("原版资源包") : VCWind::tr("原版 json");
   QListWidgetItem *qlwi = new QListWidgetItem(txt);
 
   qlwi->setData(Qt::UserRole, true);
@@ -134,6 +135,12 @@ SCL_gameVersion VCWind::current_selected_version() const noexcept {
   }
   if (ui->rdb_version_19->isChecked()) {
     return SCL_gameVersion::MC19;
+  }
+  if (ui->rdb_version_20->isChecked()) {
+    return SCL_gameVersion::MC20;
+  }
+  if (ui->rdb_version_21->isChecked()) {
+    return SCL_gameVersion::MC21;
   }
   abort();
 }
@@ -209,12 +216,21 @@ QByteArray VCWind::checksum_basic_colorset_option(
     hash.addData(json.toUtf8());
   }
 
-  hash.addData(QByteArrayView((const char *)&opt.face, sizeof(opt.face)));
-  hash.addData(QByteArrayView((const char *)&opt.version, sizeof(opt.version)));
-  hash.addData(QByteArrayView((const char *)&opt.layers, sizeof(opt.layers)));
-  hash.addData(QByteArrayView((const char *)&opt.biome, sizeof(opt.biome)));
-  hash.addData(QByteArrayView((const char *)&opt.is_leaves_transparent,
-                              sizeof(opt.is_leaves_transparent)));
+#if QT_VERSION > 0x060300
+#define VC_PMACRO_QBAV_CLASS QByteArrayView
+#else
+#define VC_PMACRO_QBAV_CLASS QByteArray
+#endif
+
+  hash.addData(VC_PMACRO_QBAV_CLASS{(const char *)&opt.face, sizeof(opt.face)});
+  hash.addData(
+      VC_PMACRO_QBAV_CLASS{(const char *)&opt.version, sizeof(opt.version)});
+  hash.addData(
+      VC_PMACRO_QBAV_CLASS{(const char *)&opt.layers, sizeof(opt.layers)});
+  hash.addData(
+      VC_PMACRO_QBAV_CLASS{(const char *)&opt.biome, sizeof(opt.biome)});
+  hash.addData(VC_PMACRO_QBAV_CLASS{(const char *)&opt.is_leaves_transparent,
+                                    sizeof(opt.is_leaves_transparent)});
 
   return hash.result();
 }
@@ -226,12 +242,33 @@ VCL_resource_pack *VCWind::create_resource_pack(
   rpfiles_qba.reserve(opt.zips.size());
   std::vector<const char *> rpfiles_charp;
   rpfiles_charp.reserve(opt.zips.size());
+
+  std::vector<QByteArray> rp_contents;
+  std::vector<VCL_read_only_buffer> rp_buffer_references;
+
   for (auto &qstr : opt.zips) {
     rpfiles_qba.emplace_back(qstr.toUtf8());
     rpfiles_charp.emplace_back(rpfiles_qba.back().data());
+    QFile file{qstr};
+    if (not file.open(QIODevice::OpenModeFlag::ReadOnly |
+                      QIODevice::OpenModeFlag::ExistingOnly)) {
+      QMessageBox::critical(nullptr, tr("无法读取文件 %1").arg(qstr),
+                            file.errorString());
+      return nullptr;
+    }
+    rp_contents.emplace_back(file.readAll());
+    const auto &content = rp_contents.back();
+    rp_buffer_references.emplace_back(content.data(), content.size());
+    file.close();
   }
+  assert(rpfiles_qba.size() == rpfiles_charp.size());
+  assert(rpfiles_charp.size() == rp_contents.size());
+  assert(rp_contents.size() == rp_buffer_references.size());
 
-  return VCL_create_resource_pack(rpfiles_charp.size(), rpfiles_charp.data());
+  return VCL_create_resource_pack_from_buffers(
+      rp_contents.size(), rp_buffer_references.data(), rpfiles_charp.data());
+  // return VCL_create_resource_pack(rpfiles_charp.size(),
+  // rpfiles_charp.data());
 }
 
 // utilitiy functions
@@ -286,7 +323,7 @@ void VCWind::on_pb_remove_rp_clicked() noexcept {
 void VCWind::on_pb_add_bsl_clicked() noexcept {
   static QString prev_dir{""};
   QStringList jsons = QFileDialog::getOpenFileNames(
-      this, VCWind::tr("选择方块id json文件"), prev_dir, "*.json");
+      this, VCWind::tr("选择方块 id json 文件"), prev_dir, "*.json");
   if (jsons.size() <= 0) {
     return;
   }
@@ -433,13 +470,16 @@ void VCWind::setup_block_widgets() noexcept {
 }
 
 bool VCWind::is_basical_colorset_changed() const noexcept {
-  static QByteArray hash_prev{""};
+  // static QByteArray hash_prev{""};
   auto curr_opt = this->current_basic_option();
   QByteArray curr_hash = this->checksum_basic_colorset_option(curr_opt);
-  const bool ret = hash_prev != curr_hash;
-  hash_prev = curr_hash;
+  const bool ret = this->basical_option_hash_prev != curr_hash;
 
   return ret;
+}
+
+void VCWind::update_hash_basic(const basic_colorset_option &opt) noexcept {
+  this->basical_option_hash_prev = this->checksum_basic_colorset_option(opt);
 }
 
 void VCWind::setup_basical_colorset() noexcept {
@@ -467,7 +507,7 @@ void VCWind::setup_basical_colorset() noexcept {
   VCL_block_state_list *bsl = VCWind::create_block_state_list(current_option);
   if (bsl == nullptr) {
     QMessageBox::critical(
-        this, VCWind::tr("方块状态列表json解析失败"),
+        this, VCWind::tr("方块状态列表 json 解析失败"),
         VCWind::tr("在此窗口之前弹出的错误信息非常重要，请将它汇报给开发者。"),
         QMessageBox::StandardButtons{QMessageBox::StandardButton::Close});
     VCL_destroy_resource_pack(rp);
@@ -485,9 +525,12 @@ void VCWind::setup_basical_colorset() noexcept {
 
   const bool success = VCL_set_resource_move(&rp, &bsl, option);
 
+  VCL_destroy_block_state_list(bsl);
+  VCL_destroy_resource_pack(rp);
+
   if (!success) {
     const auto ret = QMessageBox::critical(
-        this, VCWind::tr("资源包/方块状态列表json解析失败"),
+        this, VCWind::tr("资源包/方块状态列表 json 解析失败"),
         VCWind::tr("部分方块的投影图像计算失败，或者总颜色数量超过上限（65534）"
                    "。尝试移除解析失败的资源包/方块列表，或者减小最大层数。"),
         QMessageBox::StandardButtons{QMessageBox::StandardButton::Close});
@@ -497,6 +540,7 @@ void VCWind::setup_basical_colorset() noexcept {
     }
   }
 
+  this->update_hash_basic(current_option);
   this->setup_block_widgets();
   this->ui->ac_browse_basic_colors->setEnabled(true);
 }
@@ -515,19 +559,24 @@ QByteArray VCWind::checksum_allowed_colorset_option(
 
 bool VCWind::is_allowed_colorset_changed(
     allowed_colorset_option *opt) const noexcept {
-  static QByteArray prev_hash{""};
+  // static QByteArray prev_hash{""};
   this->selected_blocks(&opt->blocks);
   QByteArray cur_hash = VCWind::checksum_allowed_colorset_option(*opt);
 
-  const bool ret = prev_hash != cur_hash;
+  const bool ret = this->allowed_option_hash_prev != cur_hash;
 
-  prev_hash = cur_hash;
+  // prev_hash = cur_hash;
 
   return ret;
 }
 
+void VCWind::update_hash_allowed(const allowed_colorset_option &opt) noexcept {
+  this->allowed_option_hash_prev = this->checksum_allowed_colorset_option(opt);
+}
+
 void VCWind::setup_allowed_colorset() noexcept {
   this->setup_basical_colorset();
+  this->ui->ac_export_test_schem->setEnabled(true);
 
   allowed_colorset_option cur_option;
   if (VCL_is_allowed_colorset_ok() &&
@@ -558,10 +607,10 @@ void VCWind::setup_allowed_colorset() noexcept {
     }
   }
 
+  this->update_hash_allowed(cur_option);
   this->ui->gb_convert_algo->setTitle(
       VCWind::tr("调色算法 (共%1种颜色)")
           .arg(VCL_get_allowed_colors(nullptr, 0)));
-
   this->clear_convert_cache();
   this->ui->ac_browse_allowed_colors->setEnabled(true);
 }

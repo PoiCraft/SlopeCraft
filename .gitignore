@@ -47,7 +47,6 @@ Testing
 Makefile
 cmake_install.cmake
 install_manifest.txt
-compile_commands.json
 CTestTestfile.cmake
 _deps
 
@@ -66,9 +65,17 @@ install/
 3rdParty/*
 .vscode/settings.json
 
-### build
+### build ###
 build/*
 binaries/*
 .vscode/*
 .vs/*
 .cache/*
+
+### CLion ###
+.idea/*
+cmake-build-*
+
+### PyCharm ###
+py/preprocessed
+py/outputs

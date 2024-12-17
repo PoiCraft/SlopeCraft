@@ -20,8 +20,6 @@ This file is part of SlopeCraft.
     bilibili:https://space.bilibili.com/351429231
 */
 
-#include "MapViewerWind.h"
-
 #include <QFileDialog>
 #include <QFont>
 #include <QMessageBox>
@@ -31,6 +29,9 @@ This file is part of SlopeCraft.
 #include <list>
 #include <mutex>
 
+#include "SlopeCraftL.h"
+
+#include "MapViewerWind.h"
 #include "processMapFiles.h"
 #include "ui_MapViewerWind.h"
 
@@ -52,7 +53,7 @@ std::array<ARGB, 256> make_map_LUT() {
   result.fill(0x7FFF0000);
 
   const Eigen::Map<const Eigen::Array<float, 256, 3>> src(
-      SlopeCraft::RGBBasicSource);
+      SlopeCraft::SCL_get_rgb_basic_colorset_source());
 
   for (int row_idx = 0; row_idx < 256; row_idx++) {
     ARGB a, r, g, b;
@@ -102,7 +103,7 @@ std::array<ARGB, 256> make_inverse_map_LUT(const std::array<ARGB, 256> &src) {
     const ARGB argb = src[idx];
     ARGB r = (argb >> 16) & 0xFF;
     ARGB g = (argb >> 8) & 0xFF;
-    ARGB b = (argb)&0xFF;
+    ARGB b = (argb) & 0xFF;
 
     double x, y, z, _r, _g, _b;
     RGB2XYZ(r / 255.0, g / 255.0, g / 255.0, &x, &y, &z);
@@ -186,8 +187,7 @@ MapViewerWind::MapViewerWind(QWidget *parent)
 
 MapViewerWind::~MapViewerWind() {
   for (QLabel *label : this->labels) {
-    if (label != nullptr)
-      delete label;
+    if (label != nullptr) delete label;
   }
   delete ui;
 }
@@ -219,15 +219,14 @@ void MapViewerWind::reshape_tables() {
   for (int idx = 0; idx < int(this->maps.size()); idx++) {
     const int r = (is_col_major) ? (idx % rows) : (idx / cols);
     const int c = (is_col_major) ? (idx / rows) : (idx % cols);
-    if (r >= rows || c >= cols)
-      continue;
+    if (r >= rows || c >= cols) continue;
 
     QTableWidgetItem *item = new QTableWidgetItem(this->maps[idx].filename);
 
     ui->table_display_filename->setItem(r, c, item);
   }
 
-  for (QLabel *label : this->labels) { // detach label and layout
+  for (QLabel *label : this->labels) {  // detach label and layout
     if (ui->grid_layout_compose_maps->indexOf(label) >= 0) {
       ui->grid_layout_compose_maps->removeWidget(label);
     }
@@ -243,8 +242,7 @@ void MapViewerWind::reshape_tables() {
   for (int idx = 0; idx < int(this->maps.size()); idx++) {
     const int r = (is_col_major) ? (idx % rows) : (idx / cols);
     const int c = (is_col_major) ? (idx / rows) : (idx % cols);
-    if (r >= rows || c >= cols)
-      continue;
+    if (r >= rows || c >= cols) continue;
     ui->grid_layout_compose_maps->addWidget(this->labels[idx], r, c);
   }
 }
@@ -312,8 +310,8 @@ void MapViewerWind::render_single_image() {
 
   std::list<std::pair<int, int>> error_list;
 
-  if (is_color_only_image_changed) { // if color only image is changed, repaint
-                                     // it
+  if (is_color_only_image_changed) {  // if color only image is changed, repaint
+                                      // it
     new_image = QImage(cols, rows, QImage::Format_ARGB32);
     new_image.fill(QColor(255, 255, 255, 255));
 
@@ -333,7 +331,7 @@ void MapViewerWind::render_single_image() {
             .fill(image_map(r, c));
         const int basecolor = this->maps[current_idx].content()(r, c) / 4;
 
-        if (basecolor > ::current_max_base_color) { //  unlikely
+        if (basecolor > ::current_max_base_color) {  //  unlikely
           map_new_image.block(pixel_size * r, pixel_size * c, pixel_size,
                               pixel_size) = map_unknown;
           error_list.emplace_back(std::make_pair(r, c));
@@ -385,12 +383,9 @@ void MapViewerWind::render_single_image() {
   // determine the value of draw_type
   single_map_draw_type draw_type = color_only;
   {
-    if (ui->radio_show_base_color->isChecked())
-      (draw_type) = base_color;
-    if (ui->radio_show_map_color->isChecked())
-      (draw_type) = map_color;
-    if (ui->radio_show_shade->isChecked())
-      (draw_type) = shade;
+    if (ui->radio_show_base_color->isChecked()) (draw_type) = base_color;
+    if (ui->radio_show_map_color->isChecked()) (draw_type) = map_color;
+    if (ui->radio_show_shade->isChecked()) (draw_type) = shade;
   }
 
   // cout<<"draw type = "<<draw_type<<endl;
@@ -418,38 +413,40 @@ void MapViewerWind::render_single_image() {
   std::unique_ptr<u8Array128RowMajor> displayed_numbers(new u8Array128RowMajor);
 
   switch (draw_type) {
-  case color_only:
-    abort();
-    break;
-  case map_color:
-    //*displayed_numbers=this->maps[current_idx].content();
-    memcpy(displayed_numbers->data(), this->maps[current_idx].content().data(),
-           this->maps[current_idx].content().size());
-    break;
-  case base_color:
-    *displayed_numbers = (this->maps[current_idx].content()) / 4;
-    break;
-  case shade:
-    memcpy(displayed_numbers->data(), this->maps[current_idx].content().data(),
-           this->maps[current_idx].content().size());
+    case color_only:
+      abort();
+      break;
+    case map_color:
+      //*displayed_numbers=this->maps[current_idx].content();
+      memcpy(displayed_numbers->data(),
+             this->maps[current_idx].content().data(),
+             this->maps[current_idx].content().size());
+      break;
+    case base_color:
+      *displayed_numbers = (this->maps[current_idx].content()) / 4;
+      break;
+    case shade:
+      memcpy(displayed_numbers->data(),
+             this->maps[current_idx].content().data(),
+             this->maps[current_idx].content().size());
 
-    constexpr uint64_t mask =
-        0b0000001100000011000000110000001100000011000000110000001100000011;
+      constexpr uint64_t mask =
+          0b0000001100000011000000110000001100000011000000110000001100000011;
 
-    for (uint32_t idx = 0;
-         idx < displayed_numbers->size() * sizeof(uint8_t) / sizeof(uint64_t);
-         idx++) {
-      uint64_t &val =
-          *(idx + reinterpret_cast<uint64_t *>(displayed_numbers->data()));
-      val = val & mask;
-    }
-    /*
-    for(int64_t idx=0;idx<displayed_numbers->size();idx++) {
-        displayed_numbers->operator()(idx)
-                =displayed_numbers->operator()(idx)%4;
-    }
-    */
-    break;
+      for (uint32_t idx = 0;
+           idx < displayed_numbers->size() * sizeof(uint8_t) / sizeof(uint64_t);
+           idx++) {
+        uint64_t &val =
+            *(idx + reinterpret_cast<uint64_t *>(displayed_numbers->data()));
+        val = val & mask;
+      }
+      /*
+      for(int64_t idx=0;idx<displayed_numbers->size();idx++) {
+          displayed_numbers->operator()(idx)
+                  =displayed_numbers->operator()(idx)%4;
+      }
+      */
+      break;
   }
 
   QPixmap temp_image = QPixmap::fromImage(new_image);
@@ -480,19 +477,19 @@ void MapViewerWind::render_single_image() {
       uint8_t cur_number = (*displayed_numbers)(r, c);
 
       switch (draw_type) {
-      case map_color:
-        text[0] = char((cur_number / 100) + '0');
-        cur_number -= (cur_number / 100) * 100;
-        text[1] = char((cur_number / 10) + '0');
-        text[2] = char((cur_number % 10) + '0');
-        break;
-      case base_color:
-        text[0] = char(cur_number / 10 + '0');
-        text[1] = char(cur_number % 10 + '0');
-        break;
-      default:
-        text[0] = char((cur_number & 0b11) + '0');
-        break;
+        case map_color:
+          text[0] = char((cur_number / 100) + '0');
+          cur_number -= (cur_number / 100) * 100;
+          text[1] = char((cur_number / 10) + '0');
+          text[2] = char((cur_number % 10) + '0');
+          break;
+        case base_color:
+          text[0] = char(cur_number / 10 + '0');
+          text[1] = char(cur_number % 10 + '0');
+          break;
+        default:
+          text[0] = char((cur_number & 0b11) + '0');
+          break;
       }
 
       painter.drawText(rect, Qt::AlignVCenter | Qt::AlignHCenter, text);
@@ -543,7 +540,7 @@ void MapViewerWind::on_button_load_maps_clicked() {
   std::list<std::pair<QString, std::string>> error_list;
   std::mutex lock;
 
-#pragma omp parallel for
+#pragma omp parallel for schedule(static)
   for (int idx = 0; idx < filenames.size(); idx++) {
     std::string error_info;
     if (!process_map_file(filenames[idx].toLocal8Bit().data(),
@@ -591,8 +588,9 @@ void MapViewerWind::on_button_load_maps_clicked() {
     }
   }
 
-#pragma omp parallel for
-  for (map &map : this->maps) {
+#pragma omp parallel for schedule(static)
+  for (int idx = 0; idx < (int)this->maps.size(); idx++) {
+    auto &map = this->maps[idx];
     map.image = QImage(128, 128, QImage::Format::Format_ARGB32);
     Eigen::Map<Eigen::Array<ARGB, 128, 128, Eigen::RowMajor>> image_map(
         reinterpret_cast<ARGB *>(map.image.scanLine(0)));
@@ -601,7 +599,7 @@ void MapViewerWind::on_button_load_maps_clicked() {
     }
   }
 
-  update_contents();
+  this->update_contents();
 }
 
 void MapViewerWind::on_checkbox_composed_show_spacing_toggled(bool is_checked) {
@@ -611,8 +609,7 @@ void MapViewerWind::on_checkbox_composed_show_spacing_toggled(bool is_checked) {
 }
 
 void MapViewerWind::on_button_save_single_clicked() {
-  if (this->maps.size() <= 0)
-    return;
+  if (this->maps.size() <= 0) return;
 
   if (ui->label_show_single_map->pixmap().isNull()) {
     return;
@@ -631,13 +628,11 @@ void MapViewerWind::on_button_save_single_clicked() {
 }
 
 void MapViewerWind::on_button_save_composed_clicked() {
-  if (this->maps.size() <= 0)
-    return;
+  if (this->maps.size() <= 0) return;
 
   const QString dest = QFileDialog::getSaveFileName(this, tr("保存为图片"), "",
                                                     "*.png;;*.jpg;;*.gif");
-  if (dest.isEmpty())
-    return;
+  if (dest.isEmpty()) return;
 
   const int map_rows = ui->spinbox_rows->value();
   const int map_cols = ui->spinbox_cols->value();

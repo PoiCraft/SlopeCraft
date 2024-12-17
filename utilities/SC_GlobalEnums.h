@@ -50,11 +50,15 @@ enum class SCL_gameVersion : int {
   MC18 = 18,
   /// 1.19
   MC19 = 19,
+  /// 1.20
+  MC20 = 20,
+  /// 1.21
+  MC21 = 21,
   /// future version
   FUTURE = 255
 };
 
-const SCL_gameVersion max_version = SCL_gameVersion::MC19;
+constexpr SCL_gameVersion max_version = SCL_gameVersion::MC21;
 
 /// color difference formula used to match colors
 enum class SCL_convertAlgo : char {
@@ -80,13 +84,13 @@ enum class SCL_colorSpace : char {
 
 enum class SCL_compressSettings : int {
   /// don't compress
-  noCompress = 0,
+  noCompress = 0b00,
   /// compress in lossless only
-  NaturalOnly = 1,
+  NaturalOnly = 0b01,
   /// compress in lossy only
-  ForcedOnly = 2,
+  ForcedOnly = 0b10,
   /// compress with both lossless and lossy
-  Both = 3
+  Both = 0b11
 };
 
 enum class SCL_glassBridgeSettings : int {
@@ -105,19 +109,19 @@ enum class SCL_mapTypes : int {
   FileOnly = 2
 };
 
-enum class SCL_step : int {
-  /// the instance is created
-  nothing,
-  /// map type is set and waitting for image
-  wait4Image,
-  /// image is ready and ready for converting
-  convertionReady,
-  /// image is converted and ready for building 3D structure, exporting as
-  /// file-only map(s) can be done in this step
-  converted,
-  /// 3D structure is built and ready for exporting 3d structure
-  builded,
-};
+// enum class SCL_step : int {
+//   /// the instance is created
+//   nothing,
+//   /// map type is set and waitting for image
+//   wait4Image,
+//   /// image is ready and ready for converting
+//   convertionReady,
+//   /// image is converted and ready for building 3D structure, exporting as
+//   /// file-only map(s) can be done in this step
+//   converted,
+//   /// 3D structure is built and ready for exporting 3d structure
+//   builded,
+// };
 
 enum class SCL_errorFlag : int {
   /// no error
@@ -151,15 +155,25 @@ enum class SCL_errorFlag : int {
   /// is_air_structure_void to false and you don't have minecraft:air in the
   /// palette
   EXPORT_SCHEM_STRUCTURE_REQUIRES_AIR = 0x0C,
-  /// the major game version is less that MC12 or greater than MC19
+  /// the major game version is less that MC12 or greater than MC20
   UNKNOWN_MAJOR_GAME_VERSION = 0x0D,
   /// Exporting as WESchem doesn't support MC12, since the format of schematic
   /// is greatly different.
   EXPORT_SCHEM_MC12_NOT_SUPPORTED = 0x0E,
 
+  EXPORT_MAP_DATA_FAILURE = 0x0F,
+
+  EXPORT_FLAT_DIAGRAM_ON_WRONG_MAP_TYPE = 0x10,
+
+  EXPORT_FLAT_DIAGRAM_FAILURE = 0x11,
+  /// Failed to allocate memory. Upto 5.3, it will only appear when building 3D
+  /// for a huge image
+  MEMORY_ALLOCATE_FAILED = 0x12,
+
+  EXPORT_SCHEM_HAS_INVALID_ENTITY = 0x13,
 };
 
-enum class SCL_workStatues : int {
+enum class SCL_workStatus : int {
   /// waiting
   none = -1,
 
@@ -198,6 +212,23 @@ enum class SCL_HalfTpPixelSt : char {
   ReplaceWithBackGround = 'B',
   ComposeWithBackGround = 'C',
   IgnoreAlpha = 'R'
+};
+
+enum class SCL_language : int { Chinese = 0, English = 1 };
+
+enum class SCL_map_facing : int {
+  wall_north,
+  wall_south,
+  wall_east,
+  wall_west,
+  top_north,
+  top_south,
+  top_east,
+  top_west,
+  bottom_north,
+  bottom_south,
+  bottom_east,
+  bottom_west,
 };
 
 #endif

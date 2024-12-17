@@ -97,48 +97,44 @@ version_set parse_version_set(const nlohmann::json &jo,
   return {};
 }
 
-#define VCL_PRIVATE_MACRO_PARSE_ATTRIBUTE(key_str, key_enum)                   \
-  if (jo.contains(#key_str)) {                                                 \
-    if (!jo.at(#key_str).is_boolean()) {                                       \
-      *ok = false;                                                             \
-      return {};                                                               \
-    }                                                                          \
-                                                                               \
-    ret.set_attribute(VCL_block::attribute::key_enum, jo.at(#key_str));        \
+#define VCL_PRIVATE_MACRO_PARSE_ATTRIBUTE(key_str, key_enum)            \
+  if (jo.contains(#key_str)) {                                          \
+    if (!jo.at(#key_str).is_boolean()) {                                \
+      return std::nullopt;                                              \
+    }                                                                   \
+                                                                        \
+    ret.set_attribute(VCL_block::attribute::key_enum, jo.at(#key_str)); \
   }
 
-VCL_block parse_block(const nlohmann::json &jo, bool *const ok) {
+std::optional<VCL_block> parse_block(const nlohmann::json &jo) {
   if (!jo.contains("version")) {
-    *ok = false;
-    return {};
+    return std::nullopt;
   }
 
   VCL_block ret;
-  ret.version_info = parse_version_set(jo.at("version"), ok);
+  bool ok = false;
+  ret.version_info = parse_version_set(jo.at("version"), &ok);
 
-  if (!ok) {
-    *ok = false;
-    return {};
+  if (not ok) {
+    return std::nullopt;
   }
 
   ret.set_transparency(false);
 
   if (!jo.contains("class") || !jo.at("class").is_string()) {
-    *ok = false;
-    return {};
+    return std::nullopt;
   } else {
     const std::string &str = jo.at("class");
-    ret.block_class = string_to_block_class(str, ok);
+    ret.block_class = string_to_block_class(str, &ok);
 
-    if (!*ok) {
-      return {};
+    if (not ok) {
+      return std::nullopt;
     }
   }
 
   if (jo.contains("id_replace_list")) {
     if (!jo.at("id_replace_list").is_array()) {
-      *ok = false;
-      return {};
+      return std::nullopt;
     }
 
     const nlohmann::json &ja = jo.at("id_replace_list");
@@ -146,13 +142,11 @@ VCL_block parse_block(const nlohmann::json &jo, bool *const ok) {
     for (size_t i = 0; i < ja.size(); i++) {
       const nlohmann::json &jaa = ja.at(i);
       if (!jaa.is_array() || jaa.size() != 2) {
-        *ok = false;
-        return {};
+        return std::nullopt;
       }
 
       if (!jaa[0].is_number_integer() || !jaa[1].is_string()) {
-        *ok = false;
-        return {};
+        return std::nullopt;
       }
 
       int val = jaa[0];
@@ -167,8 +161,7 @@ VCL_block parse_block(const nlohmann::json &jo, bool *const ok) {
     if (jo.at("nameZH").is_string()) {
       ret.name_ZH = jo.at("nameZH");
     } else {
-      *ok = false;
-      return {};
+      return std::nullopt;
     }
   }
 
@@ -176,8 +169,7 @@ VCL_block parse_block(const nlohmann::json &jo, bool *const ok) {
     if (jo.at("nameEN").is_string()) {
       ret.name_EN = jo.at("nameEN");
     } else {
-      *ok = false;
-      return {};
+      return std::nullopt;
     }
   }
 
@@ -185,8 +177,7 @@ VCL_block parse_block(const nlohmann::json &jo, bool *const ok) {
     if (jo.at("transparent").is_boolean()) {
       ret.set_transparency(jo.at("transparent"));
     } else {
-      *ok = false;
-      return {};
+      return std::nullopt;
     }
   }
 
@@ -197,23 +188,20 @@ VCL_block parse_block(const nlohmann::json &jo, bool *const ok) {
 
       for (size_t i = 0; i < ja.size(); i++) {
         if (!ja.at(i).is_string()) {
-          *ok = false;
-          return {};
+          return std::nullopt;
         }
         bool _ok = true;
 
-        const VCL_face_t f =
-            string_to_face_idx(ja.at(i).get<nlohmann::json::string_t>(), &_ok);
-        if (!_ok) {
-          *ok = false;
-          return {};
+        const std::optional<VCL_face_t> f =
+            string_to_face_idx(ja.at(i).get<nlohmann::json::string_t>());
+        if (not f) {
+          return std::nullopt;
         }
 
-        ret.set_face_avaliablity(f, true);
+        ret.set_face_avaliablity(f.value(), true);
       }
     } else {
-      *ok = false;
-      return {};
+      return std::nullopt;
     }
   }
 
@@ -226,8 +214,6 @@ VCL_block parse_block(const nlohmann::json &jo, bool *const ok) {
   VCL_PRIVATE_MACRO_PARSE_ATTRIBUTE(is_foliage, is_foliage);
   VCL_PRIVATE_MACRO_PARSE_ATTRIBUTE(reproducible, reproducible);
   VCL_PRIVATE_MACRO_PARSE_ATTRIBUTE(rare, rare);
-
-  *ok = true;
 
   return ret;
 }
@@ -250,20 +236,18 @@ bool VCL_block_state_list::add(std::string_view filename) noexcept {
     return false;
   }
 
-  bool ok = true;
-
   for (const auto &pair : jo.items()) {
-    VCL_block vb = parse_block(pair.value(), &ok);
+    auto vb = parse_block(pair.value());
 
-    if (!ok) {
+    if (not vb) {
       std::string msg = fmt::format(
           "Failed to parse {},  : invalid value for block state {} : {}",
-          filename, pair.key(), pair.value());
+          filename, pair.key().c_str(), to_string(pair.value()));
       ::VCL_report(VCL_report_type_t::error, msg.c_str());
       return false;
     }
 
-    auto it = this->states.emplace(pair.key(), std::move(vb));
+    auto it = this->states.emplace(pair.key(), std::move(vb.value()));
 
     // This statement requires that VCL_block_state_list is a friend class of
     // VCL_block
@@ -319,7 +303,6 @@ void VCL_block_state_list::update_foliages(
 
 VCL_block_class_t string_to_block_class(std::string_view str,
                                         bool *ok) noexcept {
-
   auto ret = magic_enum::enum_cast<VCL_block_class_t>(str);
   if (ok != nullptr) {
     *ok = ret.has_value();

@@ -3,6 +3,7 @@ project(SlopeCraft_GAConverter VERSION ${SlopeCraft_version} LANGUAGES CXX)
 
 # set(CMAKE_CXX_STANDARD 20)
 find_package(OpenMP REQUIRED)
+find_package(Heu REQUIRED)
 
 set(SlopeCraft_GAConverter_sources
 
@@ -17,18 +18,19 @@ set(SlopeCraft_GAConverter_sources
 )
 
 add_library(GAConverter STATIC ${SlopeCraft_GAConverter_sources})
+target_include_directories(GAConverter PRIVATE "${CMAKE_BINARY_DIR}/SlopeCraftL")
+target_link_libraries(GAConverter PUBLIC ColorManip)
+#target_include_directories(GAConverter PUBLIC
+#    ../../ColorManip
+#)
 
-target_include_directories(GAConverter PUBLIC ${SlopeCraft_Eigen3_include_dir}
-    ${SlopeCraft_HeuristicFlow_include_dir}
-    ../../ColorManip
-)
+find_package(Eigen3 REQUIRED)
+target_link_libraries(GAConverter PUBLIC OpenMP::OpenMP_CXX Eigen3::Eigen Heu::Genetic)
 
-target_link_libraries(GAConverter PUBLIC OpenMP::OpenMP_CXX)
+target_compile_features(GAConverter PRIVATE cxx_std_23)
 
-target_compile_features(GAConverter PRIVATE cxx_std_20)
-
-if(CMAKE_SYSTEM_NAME MATCHES "Linux")
+if (CMAKE_SYSTEM_NAME MATCHES "Linux")
     set_target_properties(GAConverter PROPERTIES POSITION_INDEPENDENT_CODE TRUE)
-endif()
+endif ()
 
 # target_compile_options(GAConverter BEFORE PUBLIC "-std=c++17")

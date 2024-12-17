@@ -28,6 +28,9 @@ This file is part of SlopeCraft.
 #include <VCLConfigLoader.h>
 #include <magic_enum.hpp>
 
+#include <SC_version_buildtime.h>
+#include <fmt/format.h>
+
 using std::cout, std::endl;
 
 bool validate_input(const inputs &input) noexcept;
@@ -42,9 +45,11 @@ int main(int argc, char **argv) {
     input.prefer_gpu = true;
   }
 
-  app.set_version_flag("--version,-v",
-                       std::string("vccl version : ") + SC_VERSION_STR +
-                           ", VisualCraftL version : " + VCL_version_string());
+  app.set_version_flag("--version,-v", SC_VERSION_STR);
+  bool show_config{false};
+  app.add_flag("--show-config,--sc", show_config,
+               "Show buildtime configuration and exit.")
+      ->default_val(false);
 
   // resource
   app.add_option("--resource-pack,--rp", input.zips, "Resource packs")
@@ -57,7 +62,7 @@ int main(int argc, char **argv) {
   int __version;
   app.add_option("--mcver", __version, "MC version")
       ->default_val(19)
-      ->check(CLI::Range(12, 19, "Avaliable versions"));
+      ->check(CLI::Range(12, 21, "Avaliable versions"));
 
   app.add_option("--layers,--layer", input.layers, "Max layers")
       ->default_val(1)
@@ -85,7 +90,7 @@ int main(int argc, char **argv) {
                "conversion")
       ->default_val(false);
   app.add_flag("--show-num-color,--snc", input.show_color_num,
-               "Show the number of colos")
+               "Show the number of colors")
       ->default_val(false);
 
   //  images
@@ -174,6 +179,15 @@ int main(int argc, char **argv) {
       ->default_val(false);
 
   CLI11_PARSE(app, argc, argv);
+
+  if (show_config) {
+    fmt::println("Version : {}", SC_VERSION_STR);
+    fmt::println("Build type : {}", CMAKE_BUILD_TYPE);
+    fmt::println("GPU API : {}", SC_GPU_API);
+    fmt::println("Vectorize : {}", SC_VECTORIZE);
+    fmt::println("Gprof : {}", SC_GPROF);
+    return 0;
+  }
 
   if (input.list_gpu) {
     return list_gpu();

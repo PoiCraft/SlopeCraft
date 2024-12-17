@@ -26,6 +26,7 @@ This file is part of SlopeCraft.
 
 #include <mutex>
 #include <sstream>
+#include <span>
 
 #include "BlockStateList.h"
 #include "ParseResourcePack.h"
@@ -43,36 +44,8 @@ VCL_EXPORT_FUN void VCL_destroy_kernel(VCL_Kernel *const ptr) {
   }
 }
 
-VCL_EXPORT_FUN VCL_resource_pack *
-VCL_create_resource_pack(const int zip_file_count,
-                         const char *const *const zip_file_names) {
-  if (zip_file_count <= 0) {
-    return nullptr;
-  }
-
-  bool ok = true;
-  zipped_folder zf = zipped_folder::from_zip(zip_file_names[0], &ok);
-
-  if (!ok) {
-    std::string msg = fmt::format("Failed to parse {}\n", zip_file_names[0]);
-
-    VCL_report(VCL_report_type_t::error, msg.c_str(), true);
-    return nullptr;
-  }
-
-  for (int zfidx = 1; zfidx < zip_file_count; zfidx++) {
-    zipped_folder z = zipped_folder::from_zip(zip_file_names[zfidx], &ok);
-
-    if (!ok) {
-      std::string msg =
-          fmt::format("Failed to parse {}\n", zip_file_names[zfidx]);
-      VCL_report(VCL_report_type_t::error, msg.c_str(), true);
-      return nullptr;
-    }
-
-    zf.merge_from_base(std::move(z));
-  }
-
+VCL_resource_pack *zip_folder_to_resource_pack(
+    const zipped_folder &zf) noexcept {
   VCL_resource_pack *const rp = new VCL_resource_pack;
 
   if (!rp->add_colormaps(zf)) {
@@ -117,15 +90,90 @@ VCL_create_resource_pack(const int zip_file_count,
   return rp;
 }
 
+VCL_EXPORT_FUN VCL_resource_pack *VCL_create_resource_pack(
+    const int zip_file_count, const char *const *const zip_file_names) {
+  if (zip_file_count <= 0) {
+    return nullptr;
+  }
+  auto parse_zip = [](const char *filename) noexcept {
+    std::optional<zipped_folder> zf_opt = zipped_folder::from_zip(filename);
+
+    if (not zf_opt) {
+      std::string msg = fmt::format("Failed to parse {}\n", filename);
+      VCL_report(VCL_report_type_t::error, msg.c_str(), true);
+    }
+    return zf_opt;
+  };
+
+  zipped_folder zf;
+  {
+    std::optional<zipped_folder> zf_opt = parse_zip(zip_file_names[0]);
+
+    if (not zf_opt) {
+      return nullptr;
+    }
+    zf = std::move(zf_opt.value());
+  }
+
+  for (int zfidx = 1; zfidx < zip_file_count; zfidx++) {
+    std::optional<zipped_folder> zf_opt = parse_zip(zip_file_names[0]);
+    if (not zf_opt) {
+      return nullptr;
+    }
+
+    zf.merge_from_base(std::move(zf_opt.value()));
+  }
+
+  return zip_folder_to_resource_pack(zf);
+}
+
+[[nodiscard]] VCL_EXPORT_FUN VCL_resource_pack *
+VCL_create_resource_pack_from_buffers(const size_t zip_count,
+                                      const VCL_read_only_buffer *file_contents,
+                                      const char *const *const zip_file_names) {
+  if (zip_count <= 0) {
+    return nullptr;
+  }
+  zipped_folder zf;
+  {
+    auto zf_opt = zipped_folder::from_zip(
+        zip_file_names[0],
+        {reinterpret_cast<const uint8_t *>(file_contents[0].data),
+         file_contents[0].size});
+    if (not zf_opt) {
+      VCL_report(VCL_report_type_t::error,
+                 fmt::format("Failed to parse {}\n", zip_file_names[0]).c_str(),
+                 true);
+      return nullptr;
+    }
+    zf = std::move(zf_opt.value());
+  }
+  for (size_t idx = 1; idx < zip_count; idx++) {
+    auto zf_opt = zipped_folder::from_zip(
+        zip_file_names[idx],
+        {reinterpret_cast<const uint8_t *>(file_contents[idx].data),
+         file_contents[idx].size});
+    if (not zf_opt) {
+      VCL_report(
+          VCL_report_type_t::error,
+          fmt::format("Failed to parse {}\n", zip_file_names[idx]).c_str(),
+          true);
+      return nullptr;
+    }
+    zf.merge_from_base(std::move(zf_opt.value()));
+  }
+
+  return zip_folder_to_resource_pack(zf);
+}
+
 VCL_EXPORT_FUN void VCL_destroy_resource_pack(VCL_resource_pack *const ptr) {
   if (ptr != nullptr) {
     delete ptr;
   }
 }
 
-[[nodiscard]] VCL_EXPORT_FUN VCL_block_state_list *
-VCL_create_block_state_list(const int file_count,
-                            const char *const *const json_file_names) {
+[[nodiscard]] VCL_EXPORT_FUN VCL_block_state_list *VCL_create_block_state_list(
+    const int file_count, const char *const *const json_file_names) {
   if (file_count <= 0 || json_file_names == nullptr) {
     return nullptr;
   }
@@ -139,8 +187,8 @@ VCL_create_block_state_list(const int file_count,
   return bsl;
 }
 
-VCL_EXPORT_FUN void
-VCL_destroy_block_state_list(VCL_block_state_list *const ptr) {
+VCL_EXPORT_FUN void VCL_destroy_block_state_list(
+    VCL_block_state_list *const ptr) {
   delete ptr;
 }
 
@@ -267,7 +315,6 @@ VCL_EXPORT_FUN void VCL_display_resource_pack(const VCL_resource_pack *rp,
 VCL_EXPORT_FUN const uint32_t *VCL_get_colormap(const VCL_resource_pack *rp,
                                                 bool is_foliage, int *rows,
                                                 int *cols) {
-
   if (rows != nullptr) {
     *rows = 256;
   }
@@ -312,36 +359,34 @@ void VCL_display_block_state_list(const VCL_block_state_list *bsl) {
   VCL_report(VCL_report_type_t::information, msg.c_str(), true);
 }
 
-VCL_EXPORT_FUN double
-VCL_estimate_color_num(size_t num_layers, size_t num_foreground,
-                       size_t num_background,
-                       size_t num_nontransparent_non_background) {
+VCL_EXPORT_FUN double VCL_estimate_color_num(
+    size_t num_layers, size_t num_foreground, size_t num_background,
+    size_t num_nontransparent_non_background) {
   double a = num_background;
   double b = num_foreground;
   double num_stacked = 0;
 
   switch (num_foreground) {
-  case 0:
-    num_stacked = a;
-    break;
-  case 1:
-    num_stacked = a + a * b;
-    break;
-  case 2:
-    num_stacked = a + (num_layers + 1) * b * a;
-    break;
-  default:
-    num_stacked = a + a * b * (std::pow(b - 1, num_layers + 1) - 1) / (b - 2);
-    break;
+    case 0:
+      num_stacked = a;
+      break;
+    case 1:
+      num_stacked = a + a * b;
+      break;
+    case 2:
+      num_stacked = a + (num_layers + 1) * b * a;
+      break;
+    default:
+      num_stacked = a + a * b * (std::pow(b - 1, num_layers + 1) - 1) / (b - 2);
+      break;
   }
 
   return num_stacked + num_nontransparent_non_background;
 }
 
-VCL_EXPORT_FUN bool
-VCL_set_resource_copy(const VCL_resource_pack *const rp,
-                      const VCL_block_state_list *const bsl,
-                      const VCL_set_resource_option &option) {
+VCL_EXPORT_FUN bool VCL_set_resource_copy(
+    const VCL_resource_pack *const rp, const VCL_block_state_list *const bsl,
+    const VCL_set_resource_option &option) {
   if (rp == nullptr || bsl == nullptr) {
     return false;
   }
@@ -368,10 +413,9 @@ VCL_set_resource_copy(const VCL_resource_pack *const rp,
   return ret;
 }
 
-VCL_EXPORT_FUN bool
-VCL_set_resource_move(VCL_resource_pack **rp_ptr,
-                      VCL_block_state_list **bsl_ptr,
-                      const VCL_set_resource_option &option) {
+VCL_EXPORT_FUN bool VCL_set_resource_move(
+    VCL_resource_pack **rp_ptr, VCL_block_state_list **bsl_ptr,
+    const VCL_set_resource_option &option) {
   if (rp_ptr == nullptr || bsl_ptr == nullptr) {
     return false;
   }
@@ -472,10 +516,9 @@ VCL_EXPORT_FUN size_t VCL_num_basic_colors() {
   return TokiVC::LUT_bcitb().size();
 }
 
-VCL_EXPORT_FUN int
-VCL_get_basic_color_composition(size_t color_idx,
-                                const VCL_block **const blocks_dest,
-                                uint32_t *const color) {
+VCL_EXPORT_FUN int VCL_get_basic_color_composition(
+    size_t color_idx, const VCL_block **const blocks_dest,
+    uint32_t *const color) {
   std::shared_lock<std::shared_mutex> lkgd(TokiVC_internal::global_lock);
 
   if (!TokiVC_internal::is_basic_color_set_ready) {
@@ -514,12 +557,11 @@ VCL_get_basic_color_composition(size_t color_idx,
   return num_blocks;
 }
 
-VCL_EXPORT_FUN bool
-VCL_set_allowed_blocks(const VCL_block *const *const blocks_allowed,
-                       size_t num_block_allowed) {
+VCL_EXPORT_FUN bool VCL_set_allowed_blocks(
+    const VCL_block *const *const blocks_allowed, size_t num_block_allowed) {
   std::unique_lock<std::shared_mutex> lkgd(TokiVC_internal::global_lock);
 
-  return TokiVC::set_allowed_no_lock(blocks_allowed, num_block_allowed);
+  return TokiVC::set_allowed_no_lock({blocks_allowed, num_block_allowed});
 }
 VCL_EXPORT_FUN void VCL_discard_allowed_blocks() {
   std::unique_lock<std::shared_mutex> lkgd(TokiVC_internal::global_lock);
@@ -527,7 +569,6 @@ VCL_EXPORT_FUN void VCL_discard_allowed_blocks() {
 }
 
 VCL_EXPORT_FUN bool VCL_is_allowed_colorset_ok() {
-
   std::shared_lock<std::shared_mutex> lkgd(TokiVC_internal::global_lock);
 
   if (!TokiVC_internal::is_basic_color_set_ready) {
@@ -569,7 +610,7 @@ VCL_EXPORT_FUN size_t VCL_get_allowed_color_id(
   std::shared_lock<std::shared_mutex> lkgd(TokiVC_internal::global_lock);
 
   if (!TokiVC_internal::is_basic_color_set_ready ||
-      !TokiVC_internal::is_basic_color_set_ready) {
+      !TokiVC_internal::is_allowed_color_set_ready) {
     return 0;
   }
 
@@ -685,13 +726,13 @@ VCL_EXPORT_FUN size_t VCL_get_blocks_from_block_state_list_match_const(
   size_t write_counter = 0;
 
   const bool can_write =
-      (array_of_const_VCL_block != nullptr) && (array_capcity > 0);
+      (array_of_const_VCL_block not_eq nullptr) and (array_capcity > 0);
 
   for (const auto &pair : bsl->block_states()) {
     if (pair.second.match(version, f)) {
       available_block_counter++;
 
-      if (can_write && (write_counter < array_capcity)) {
+      if (can_write and (write_counter < array_capcity)) {
         array_of_const_VCL_block[write_counter] = &pair.second;
         write_counter++;
       }
@@ -710,8 +751,7 @@ VCL_EXPORT_FUN bool VCL_is_block_enabled(const VCL_block *b) {
 }
 
 VCL_EXPORT_FUN void VCL_set_block_enabled(VCL_block *b, bool val) {
-  if (b == nullptr)
-    return;
+  if (b == nullptr) return;
 
   b->set_disabled(!val);
 }
@@ -721,7 +761,11 @@ VCL_EXPORT_FUN const char *VCL_face_t_to_str(VCL_face_t f) {
 }
 
 VCL_EXPORT_FUN VCL_face_t VCL_str_to_face_t(const char *str, bool *ok) {
-  return string_to_face_idx(str, ok);
+  auto res = string_to_face_idx(str);
+  if (ok not_eq nullptr) {
+    *ok = res.has_value();
+  }
+  return res.value_or(VCL_face_t::face_up);
 }
 
 VCL_EXPORT_FUN bool VCL_get_block_attribute(const VCL_block *b,
@@ -795,7 +839,7 @@ VCL_EXPORT_FUN bool VCL_compare_block(const VCL_block *b1,
     }
   }
 
-  return std::less<std::string>()(*b1->full_id_ptr(), *b2->full_id_ptr());
+  return std::less<std::string_view>()(*b1->full_id_ptr(), *b2->full_id_ptr());
 }
 
 VCL_EXPORT_FUN VCL_block_class_t VCL_string_to_block_class(const char *str,
@@ -803,9 +847,8 @@ VCL_EXPORT_FUN VCL_block_class_t VCL_string_to_block_class(const char *str,
   return string_to_block_class(str, ok);
 }
 
-[[nodiscard]] VCL_EXPORT_FUN VCL_model *
-VCL_get_block_model(const VCL_block *block,
-                    const VCL_resource_pack *resource_pack) {
+[[nodiscard]] VCL_EXPORT_FUN VCL_model *VCL_get_block_model(
+    const VCL_block *block, const VCL_resource_pack *resource_pack) {
   if (block->full_id_ptr() == nullptr) {
     return nullptr;
   }
@@ -824,9 +867,8 @@ VCL_get_block_model(const VCL_block *block,
   return ret;
 }
 
-[[nodiscard]] VCL_EXPORT_FUN VCL_model *
-VCL_get_block_model_by_name(const VCL_resource_pack *rp, const char *name) {
-
+[[nodiscard]] VCL_EXPORT_FUN VCL_model *VCL_get_block_model_by_name(
+    const VCL_resource_pack *rp, const char *name) {
   auto result = rp->find_model(name);
 
   if (result.index() == 0) {
@@ -869,7 +911,7 @@ VCL_EXPORT_FUN bool VCL_compute_projection_image(const VCL_model *md,
     return false;
   }
 
-  auto img = mdptr->projection_image(face);
+  [[maybe_unused]] auto img = mdptr->projection_image(face);
 
   Eigen::Map<block_model::EImgRowMajor_t> map(img_buffer_argb32, 16, 16);
 
@@ -930,15 +972,15 @@ void default_report_callback(VCL_report_type_t type, const char *msg, bool) {
   const char *type_msg = nullptr;
 
   switch (type) {
-  case VCL_report_type_t::information:
-    type_msg = "Information : ";
-    break;
-  case VCL_report_type_t::warning:
-    type_msg = "Warning : ";
-    break;
-  case VCL_report_type_t::error:
-    type_msg = "Error : ";
-    break;
+    case VCL_report_type_t::information:
+      type_msg = "Information : ";
+      break;
+    case VCL_report_type_t::warning:
+      type_msg = "Warning : ";
+      break;
+    case VCL_report_type_t::error:
+      type_msg = "Error : ";
+      break;
   }
 
   printf("\n%s%s\n", type_msg, msg);
@@ -1008,134 +1050,134 @@ static_assert(std::is_trivially_copyable_v<VCL_biome_t> &&
 
 VCL_EXPORT_FUN VCL_biome_info VCL_get_biome_info(VCL_biome_t biome) {
   switch (biome) {
-  case VCL_biome_t::the_void:
-    return VCL_biome_info{0.5, 0.5};
-  case VCL_biome_t::plains:
-    return VCL_biome_info{0.8, 0.4};
-  case VCL_biome_t::sunflower_plains:
-    return VCL_biome_info{0.8, 0.4};
-  case VCL_biome_t::snowy_plains:
-    return VCL_biome_info{0, 0.5};
-  case VCL_biome_t::ice_spikes:
-    return VCL_biome_info{0, 0.5};
-  case VCL_biome_t::desert:
-    return VCL_biome_info{2, 0};
-  case VCL_biome_t::swamp:
-    return VCL_biome_info{0.8, 0.9};
-  case VCL_biome_t::mangrove_swamp:
-    return VCL_biome_info{0.8, 0.9};
-  case VCL_biome_t::forest:
-    return VCL_biome_info{0.7, 0.4};
-  case VCL_biome_t::flower_forest:
-    return VCL_biome_info{0.7, 0.8};
-  case VCL_biome_t::birch_forest:
-    return VCL_biome_info{0.6, 0.6};
-  case VCL_biome_t::dark_forest:
-    return VCL_biome_info{0.7, 0.8};
-  case VCL_biome_t::old_growth_birch_forest:
-    return VCL_biome_info{0.6, 0.6};
-  case VCL_biome_t::old_growth_pine_taiga:
-    return VCL_biome_info{0.3, 0.8};
-  case VCL_biome_t::old_growth_spruce_taiga:
-    return VCL_biome_info{0.25, 0.8};
-  case VCL_biome_t::taiga:
-    return VCL_biome_info{0.25, 0.8};
-  case VCL_biome_t::snowy_taiga:
-    return VCL_biome_info{-0.5, 0.4};
-  case VCL_biome_t::savanna:
-    return VCL_biome_info{2, 0};
-  case VCL_biome_t::savanna_plateau:
-    return VCL_biome_info{2, 0};
-  case VCL_biome_t::windswept_hills:
-    return VCL_biome_info{0.2, 0.3};
-  case VCL_biome_t::windswept_gravelly_hills:
-    return VCL_biome_info{0.2, 0.3};
-  case VCL_biome_t::windswept_forest:
-    return VCL_biome_info{0.2, 0.3};
-  case VCL_biome_t::windswept_savanna:
-    return VCL_biome_info{2, 0};
-  case VCL_biome_t::jungle:
-    return VCL_biome_info{0.95, 0.9};
-  case VCL_biome_t::sparse_jungle:
-    return VCL_biome_info{0.95, 0.8};
-  case VCL_biome_t::bamboo_jungle:
-    return VCL_biome_info{0.95, 0.9};
-  case VCL_biome_t::badlands:
-    return VCL_biome_info{2, 0};
-  case VCL_biome_t::eroded_badlands:
-    return VCL_biome_info{2, 0};
-  case VCL_biome_t::wooded_badlands:
-    return VCL_biome_info{2, 0};
-  case VCL_biome_t::meadow:
-    return VCL_biome_info{0.5, 0.8};
-  case VCL_biome_t::grove:
-    return VCL_biome_info{-0.2, 0.8};
-  case VCL_biome_t::snowy_slopes:
-    return VCL_biome_info{-0.3, 0.9};
-  case VCL_biome_t::frozen_peaks:
-    return VCL_biome_info{-0.7, 0.9};
-  case VCL_biome_t::jagged_peaks:
-    return VCL_biome_info{-0.7, 0.9};
-  case VCL_biome_t::stony_peaks:
-    return VCL_biome_info{1, 0.3};
-  case VCL_biome_t::river:
-    return VCL_biome_info{0.5, 0.5};
-  case VCL_biome_t::frozen_river:
-    return VCL_biome_info{0, 0.5};
-  case VCL_biome_t::beach:
-    return VCL_biome_info{0.8, 0.4};
-  case VCL_biome_t::snowy_beach:
-    return VCL_biome_info{0.05, 0.3};
-  case VCL_biome_t::stony_shore:
-    return VCL_biome_info{0.2, 0.3};
-  case VCL_biome_t::warm_ocean:
-    return VCL_biome_info{0.5, 0.5};
-  case VCL_biome_t::lukewarm_ocean:
-    return VCL_biome_info{0.5, 0.5};
-  case VCL_biome_t::deep_lukewarm_ocean:
-    return VCL_biome_info{0.5, 0.5};
-  case VCL_biome_t::ocean:
-    return VCL_biome_info{0.5, 0.5};
-  case VCL_biome_t::deep_ocean:
-    return VCL_biome_info{0.5, 0.5};
-  case VCL_biome_t::cold_ocean:
-    return VCL_biome_info{0.5, 0.5};
-  case VCL_biome_t::deep_cold_ocean:
-    return VCL_biome_info{0.5, 0.5};
-  case VCL_biome_t::frozen_ocean:
-    return VCL_biome_info{0, 0.5};
-  case VCL_biome_t::deep_frozen_ocean:
-    return VCL_biome_info{0.5, 0.5};
-  case VCL_biome_t::mushroom_fields:
-    return VCL_biome_info{0.9, 1};
-  case VCL_biome_t::dripstone_caves:
-    return VCL_biome_info{0.8, 0.4};
-  case VCL_biome_t::lush_caves:
-    return VCL_biome_info{0.5, 0.5};
-  case VCL_biome_t::deep_dark:
-    return VCL_biome_info{0.8, 0.4};
-  case VCL_biome_t::nether_wastes:
-    return VCL_biome_info{2, 0};
-  case VCL_biome_t::warped_forest:
-    return VCL_biome_info{2, 0};
-  case VCL_biome_t::crimson_forest:
-    return VCL_biome_info{2, 0};
-  case VCL_biome_t::soul_sand_valley:
-    return VCL_biome_info{2, 0};
-  case VCL_biome_t::basalt_deltas:
-    return VCL_biome_info{2, 0};
-  case VCL_biome_t::the_end:
-    return VCL_biome_info{0.5, 0.5};
-  case VCL_biome_t::end_highlands:
-    return VCL_biome_info{0.5, 0.5};
-  case VCL_biome_t::end_midlands:
-    return VCL_biome_info{0.5, 0.5};
-  case VCL_biome_t::small_end_islands:
-    return VCL_biome_info{0.5, 0.5};
-  case VCL_biome_t::end_barrens:
-    return VCL_biome_info{0.5, 0.5};
-  case VCL_biome_t::cherry_grove:
-    return VCL_biome_info{0.5, 0.8};
+    case VCL_biome_t::the_void:
+      return VCL_biome_info{0.5, 0.5};
+    case VCL_biome_t::plains:
+      return VCL_biome_info{0.8, 0.4};
+    case VCL_biome_t::sunflower_plains:
+      return VCL_biome_info{0.8, 0.4};
+    case VCL_biome_t::snowy_plains:
+      return VCL_biome_info{0, 0.5};
+    case VCL_biome_t::ice_spikes:
+      return VCL_biome_info{0, 0.5};
+    case VCL_biome_t::desert:
+      return VCL_biome_info{2, 0};
+    case VCL_biome_t::swamp:
+      return VCL_biome_info{0.8, 0.9};
+    case VCL_biome_t::mangrove_swamp:
+      return VCL_biome_info{0.8, 0.9};
+    case VCL_biome_t::forest:
+      return VCL_biome_info{0.7, 0.4};
+    case VCL_biome_t::flower_forest:
+      return VCL_biome_info{0.7, 0.8};
+    case VCL_biome_t::birch_forest:
+      return VCL_biome_info{0.6, 0.6};
+    case VCL_biome_t::dark_forest:
+      return VCL_biome_info{0.7, 0.8};
+    case VCL_biome_t::old_growth_birch_forest:
+      return VCL_biome_info{0.6, 0.6};
+    case VCL_biome_t::old_growth_pine_taiga:
+      return VCL_biome_info{0.3, 0.8};
+    case VCL_biome_t::old_growth_spruce_taiga:
+      return VCL_biome_info{0.25, 0.8};
+    case VCL_biome_t::taiga:
+      return VCL_biome_info{0.25, 0.8};
+    case VCL_biome_t::snowy_taiga:
+      return VCL_biome_info{-0.5, 0.4};
+    case VCL_biome_t::savanna:
+      return VCL_biome_info{2, 0};
+    case VCL_biome_t::savanna_plateau:
+      return VCL_biome_info{2, 0};
+    case VCL_biome_t::windswept_hills:
+      return VCL_biome_info{0.2, 0.3};
+    case VCL_biome_t::windswept_gravelly_hills:
+      return VCL_biome_info{0.2, 0.3};
+    case VCL_biome_t::windswept_forest:
+      return VCL_biome_info{0.2, 0.3};
+    case VCL_biome_t::windswept_savanna:
+      return VCL_biome_info{2, 0};
+    case VCL_biome_t::jungle:
+      return VCL_biome_info{0.95, 0.9};
+    case VCL_biome_t::sparse_jungle:
+      return VCL_biome_info{0.95, 0.8};
+    case VCL_biome_t::bamboo_jungle:
+      return VCL_biome_info{0.95, 0.9};
+    case VCL_biome_t::badlands:
+      return VCL_biome_info{2, 0};
+    case VCL_biome_t::eroded_badlands:
+      return VCL_biome_info{2, 0};
+    case VCL_biome_t::wooded_badlands:
+      return VCL_biome_info{2, 0};
+    case VCL_biome_t::meadow:
+      return VCL_biome_info{0.5, 0.8};
+    case VCL_biome_t::grove:
+      return VCL_biome_info{-0.2, 0.8};
+    case VCL_biome_t::snowy_slopes:
+      return VCL_biome_info{-0.3, 0.9};
+    case VCL_biome_t::frozen_peaks:
+      return VCL_biome_info{-0.7, 0.9};
+    case VCL_biome_t::jagged_peaks:
+      return VCL_biome_info{-0.7, 0.9};
+    case VCL_biome_t::stony_peaks:
+      return VCL_biome_info{1, 0.3};
+    case VCL_biome_t::river:
+      return VCL_biome_info{0.5, 0.5};
+    case VCL_biome_t::frozen_river:
+      return VCL_biome_info{0, 0.5};
+    case VCL_biome_t::beach:
+      return VCL_biome_info{0.8, 0.4};
+    case VCL_biome_t::snowy_beach:
+      return VCL_biome_info{0.05, 0.3};
+    case VCL_biome_t::stony_shore:
+      return VCL_biome_info{0.2, 0.3};
+    case VCL_biome_t::warm_ocean:
+      return VCL_biome_info{0.5, 0.5};
+    case VCL_biome_t::lukewarm_ocean:
+      return VCL_biome_info{0.5, 0.5};
+    case VCL_biome_t::deep_lukewarm_ocean:
+      return VCL_biome_info{0.5, 0.5};
+    case VCL_biome_t::ocean:
+      return VCL_biome_info{0.5, 0.5};
+    case VCL_biome_t::deep_ocean:
+      return VCL_biome_info{0.5, 0.5};
+    case VCL_biome_t::cold_ocean:
+      return VCL_biome_info{0.5, 0.5};
+    case VCL_biome_t::deep_cold_ocean:
+      return VCL_biome_info{0.5, 0.5};
+    case VCL_biome_t::frozen_ocean:
+      return VCL_biome_info{0, 0.5};
+    case VCL_biome_t::deep_frozen_ocean:
+      return VCL_biome_info{0.5, 0.5};
+    case VCL_biome_t::mushroom_fields:
+      return VCL_biome_info{0.9, 1};
+    case VCL_biome_t::dripstone_caves:
+      return VCL_biome_info{0.8, 0.4};
+    case VCL_biome_t::lush_caves:
+      return VCL_biome_info{0.5, 0.5};
+    case VCL_biome_t::deep_dark:
+      return VCL_biome_info{0.8, 0.4};
+    case VCL_biome_t::nether_wastes:
+      return VCL_biome_info{2, 0};
+    case VCL_biome_t::warped_forest:
+      return VCL_biome_info{2, 0};
+    case VCL_biome_t::crimson_forest:
+      return VCL_biome_info{2, 0};
+    case VCL_biome_t::soul_sand_valley:
+      return VCL_biome_info{2, 0};
+    case VCL_biome_t::basalt_deltas:
+      return VCL_biome_info{2, 0};
+    case VCL_biome_t::the_end:
+      return VCL_biome_info{0.5, 0.5};
+    case VCL_biome_t::end_highlands:
+      return VCL_biome_info{0.5, 0.5};
+    case VCL_biome_t::end_midlands:
+      return VCL_biome_info{0.5, 0.5};
+    case VCL_biome_t::small_end_islands:
+      return VCL_biome_info{0.5, 0.5};
+    case VCL_biome_t::end_barrens:
+      return VCL_biome_info{0.5, 0.5};
+    case VCL_biome_t::cherry_grove:
+      return VCL_biome_info{0.5, 0.8};
   }
   return VCL_biome_info{NAN, NAN};
 }
@@ -1143,270 +1185,269 @@ VCL_EXPORT_FUN VCL_biome_info VCL_get_biome_info(VCL_biome_t biome) {
 #include <magic_enum.hpp>
 
 const char *VCL_biome_name_ZH(VCL_biome_t b) noexcept {
-
   switch (b) {
-  case VCL_biome_t::the_void:
-    return "虚空";
-  case VCL_biome_t::plains:
-    return "平原";
-  case VCL_biome_t::sunflower_plains:
-    return "向日葵平原";
-  case VCL_biome_t::snowy_plains:
-    return "雪原";
-  case VCL_biome_t::ice_spikes:
-    return "冰刺之地";
-  case VCL_biome_t::desert:
-    return "沙漠";
-  case VCL_biome_t::swamp:
-    return "湿地";
-  case VCL_biome_t::mangrove_swamp:
-    return "红树林湿地";
-  case VCL_biome_t::forest:
-    return "森林";
-  case VCL_biome_t::flower_forest:
-    return "繁华森林";
-  case VCL_biome_t::birch_forest:
-    return "白桦森林";
-  case VCL_biome_t::dark_forest:
-    return "黑森林";
-  case VCL_biome_t::old_growth_birch_forest:
-    return "原始桦木森林";
-  case VCL_biome_t::old_growth_pine_taiga:
-    return "原始松木针叶林";
-  case VCL_biome_t::old_growth_spruce_taiga:
-    return "原始云杉针叶林";
-  case VCL_biome_t::taiga:
-    return "针叶林";
-  case VCL_biome_t::snowy_taiga:
-    return "积雪针叶林";
-  case VCL_biome_t::savanna:
-    return "热带草原";
-  case VCL_biome_t::savanna_plateau:
-    return "热带高原";
-  case VCL_biome_t::windswept_hills:
-    return "风袭丘陵";
-  case VCL_biome_t::windswept_gravelly_hills:
-    return "风袭沙砾丘陵";
-  case VCL_biome_t::windswept_forest:
-    return "风袭森林";
-  case VCL_biome_t::windswept_savanna:
-    return "风袭热带草原";
-  case VCL_biome_t::jungle:
-    return "丛林";
-  case VCL_biome_t::sparse_jungle:
-    return "稀疏丛林";
-  case VCL_biome_t::bamboo_jungle:
-    return "竹林";
-  case VCL_biome_t::badlands:
-    return "恶地 (粘土山)";
-  case VCL_biome_t::eroded_badlands:
-    return "风蚀恶地";
-  case VCL_biome_t::wooded_badlands:
-    return "疏林恶地";
-  case VCL_biome_t::meadow:
-    return "草甸";
-  case VCL_biome_t::grove:
-    return "雪林";
-  case VCL_biome_t::snowy_slopes:
-    return "积雪山坡";
-  case VCL_biome_t::frozen_peaks:
-    return "冰封山峰";
-  case VCL_biome_t::jagged_peaks:
-    return "尖峭山峰";
-  case VCL_biome_t::stony_peaks:
-    return "裸岩山峰";
-  case VCL_biome_t::river:
-    return "河流";
-  case VCL_biome_t::frozen_river:
-    return "冻河";
-  case VCL_biome_t::beach:
-    return "沙滩";
-  case VCL_biome_t::snowy_beach:
-    return "积雪沙滩";
-  case VCL_biome_t::stony_shore:
-    return "石岸";
-  case VCL_biome_t::warm_ocean:
-    return "暖水海洋";
-  case VCL_biome_t::lukewarm_ocean:
-    return "温水海洋";
-  case VCL_biome_t::deep_lukewarm_ocean:
-    return "温水深海";
-  case VCL_biome_t::ocean:
-    return "海洋";
-  case VCL_biome_t::deep_ocean:
-    return "深海";
-  case VCL_biome_t::cold_ocean:
-    return "冷水海洋";
-  case VCL_biome_t::deep_cold_ocean:
-    return "冷水深海";
-  case VCL_biome_t::frozen_ocean:
-    return "冻洋";
-  case VCL_biome_t::deep_frozen_ocean:
-    return "冰冻深海";
-  case VCL_biome_t::mushroom_fields:
-    return "蘑菇岛";
-  case VCL_biome_t::dripstone_caves:
-    return "溶洞";
-  case VCL_biome_t::lush_caves:
-    return "繁茂洞穴";
-  case VCL_biome_t::deep_dark:
-    return "Deep ♂ Dark ♂";
-  case VCL_biome_t::nether_wastes:
-    return "下界荒地";
-  case VCL_biome_t::warped_forest:
-    return "扭曲森林";
-  case VCL_biome_t::crimson_forest:
-    return "绯红森林";
-  case VCL_biome_t::soul_sand_valley:
-    return "灵魂沙峡谷";
-  case VCL_biome_t::basalt_deltas:
-    return "玄武岩三角洲";
-  case VCL_biome_t::the_end:
-    return "末地";
-  case VCL_biome_t::end_highlands:
-    return "末地高原";
-  case VCL_biome_t::end_midlands:
-    return "末地内陆";
-  case VCL_biome_t::small_end_islands:
-    return "末地小型岛屿";
-  case VCL_biome_t::end_barrens:
-    return "末地荒地";
-  case VCL_biome_t::cherry_grove:
-    return "樱花树林 (1.20)";
+    case VCL_biome_t::the_void:
+      return "虚空";
+    case VCL_biome_t::plains:
+      return "平原";
+    case VCL_biome_t::sunflower_plains:
+      return "向日葵平原";
+    case VCL_biome_t::snowy_plains:
+      return "雪原";
+    case VCL_biome_t::ice_spikes:
+      return "冰刺之地";
+    case VCL_biome_t::desert:
+      return "沙漠";
+    case VCL_biome_t::swamp:
+      return "湿地";
+    case VCL_biome_t::mangrove_swamp:
+      return "红树林湿地";
+    case VCL_biome_t::forest:
+      return "森林";
+    case VCL_biome_t::flower_forest:
+      return "繁华森林";
+    case VCL_biome_t::birch_forest:
+      return "白桦森林";
+    case VCL_biome_t::dark_forest:
+      return "黑森林";
+    case VCL_biome_t::old_growth_birch_forest:
+      return "原始桦木森林";
+    case VCL_biome_t::old_growth_pine_taiga:
+      return "原始松木针叶林";
+    case VCL_biome_t::old_growth_spruce_taiga:
+      return "原始云杉针叶林";
+    case VCL_biome_t::taiga:
+      return "针叶林";
+    case VCL_biome_t::snowy_taiga:
+      return "积雪针叶林";
+    case VCL_biome_t::savanna:
+      return "热带草原";
+    case VCL_biome_t::savanna_plateau:
+      return "热带高原";
+    case VCL_biome_t::windswept_hills:
+      return "风袭丘陵";
+    case VCL_biome_t::windswept_gravelly_hills:
+      return "风袭沙砾丘陵";
+    case VCL_biome_t::windswept_forest:
+      return "风袭森林";
+    case VCL_biome_t::windswept_savanna:
+      return "风袭热带草原";
+    case VCL_biome_t::jungle:
+      return "丛林";
+    case VCL_biome_t::sparse_jungle:
+      return "稀疏丛林";
+    case VCL_biome_t::bamboo_jungle:
+      return "竹林";
+    case VCL_biome_t::badlands:
+      return "恶地 (粘土山)";
+    case VCL_biome_t::eroded_badlands:
+      return "风蚀恶地";
+    case VCL_biome_t::wooded_badlands:
+      return "疏林恶地";
+    case VCL_biome_t::meadow:
+      return "草甸";
+    case VCL_biome_t::grove:
+      return "雪林";
+    case VCL_biome_t::snowy_slopes:
+      return "积雪山坡";
+    case VCL_biome_t::frozen_peaks:
+      return "冰封山峰";
+    case VCL_biome_t::jagged_peaks:
+      return "尖峭山峰";
+    case VCL_biome_t::stony_peaks:
+      return "裸岩山峰";
+    case VCL_biome_t::river:
+      return "河流";
+    case VCL_biome_t::frozen_river:
+      return "冻河";
+    case VCL_biome_t::beach:
+      return "沙滩";
+    case VCL_biome_t::snowy_beach:
+      return "积雪沙滩";
+    case VCL_biome_t::stony_shore:
+      return "石岸";
+    case VCL_biome_t::warm_ocean:
+      return "暖水海洋";
+    case VCL_biome_t::lukewarm_ocean:
+      return "温水海洋";
+    case VCL_biome_t::deep_lukewarm_ocean:
+      return "温水深海";
+    case VCL_biome_t::ocean:
+      return "海洋";
+    case VCL_biome_t::deep_ocean:
+      return "深海";
+    case VCL_biome_t::cold_ocean:
+      return "冷水海洋";
+    case VCL_biome_t::deep_cold_ocean:
+      return "冷水深海";
+    case VCL_biome_t::frozen_ocean:
+      return "冻洋";
+    case VCL_biome_t::deep_frozen_ocean:
+      return "冰冻深海";
+    case VCL_biome_t::mushroom_fields:
+      return "蘑菇岛";
+    case VCL_biome_t::dripstone_caves:
+      return "溶洞";
+    case VCL_biome_t::lush_caves:
+      return "繁茂洞穴";
+    case VCL_biome_t::deep_dark:
+      return "Deep ♂ Dark ♂";
+    case VCL_biome_t::nether_wastes:
+      return "下界荒地";
+    case VCL_biome_t::warped_forest:
+      return "扭曲森林";
+    case VCL_biome_t::crimson_forest:
+      return "绯红森林";
+    case VCL_biome_t::soul_sand_valley:
+      return "灵魂沙峡谷";
+    case VCL_biome_t::basalt_deltas:
+      return "玄武岩三角洲";
+    case VCL_biome_t::the_end:
+      return "末地";
+    case VCL_biome_t::end_highlands:
+      return "末地高原";
+    case VCL_biome_t::end_midlands:
+      return "末地内陆";
+    case VCL_biome_t::small_end_islands:
+      return "末地小型岛屿";
+    case VCL_biome_t::end_barrens:
+      return "末地荒地";
+    case VCL_biome_t::cherry_grove:
+      return "樱花树林";
   }
   return "Unamed";
 }
 
 const char *VCL_biome_name_EN(VCL_biome_t b) noexcept {
   switch (b) {
-  case VCL_biome_t::the_void:
-    return "The Void";
-  case VCL_biome_t::plains:
-    return "Plains";
-  case VCL_biome_t::sunflower_plains:
-    return "Sunflower Plains";
-  case VCL_biome_t::snowy_plains:
-    return "Snowy Plains";
-  case VCL_biome_t::ice_spikes:
-    return "Ice Spikes";
-  case VCL_biome_t::desert:
-    return "Desert";
-  case VCL_biome_t::swamp:
-    return "Swamp";
-  case VCL_biome_t::mangrove_swamp:
-    return "Mangrove Swamp";
-  case VCL_biome_t::forest:
-    return "Forest";
-  case VCL_biome_t::flower_forest:
-    return "Flower Forest";
-  case VCL_biome_t::birch_forest:
-    return "Birch Forest";
-  case VCL_biome_t::dark_forest:
-    return "Dark Forest";
-  case VCL_biome_t::old_growth_birch_forest:
-    return "Old Growth Birch Forest";
-  case VCL_biome_t::old_growth_pine_taiga:
-    return "Old Growth Pine Taiga";
-  case VCL_biome_t::old_growth_spruce_taiga:
-    return "Old Growth Spruce Taiga";
-  case VCL_biome_t::taiga:
-    return "Taiga";
-  case VCL_biome_t::snowy_taiga:
-    return "Snowy Taiga";
-  case VCL_biome_t::savanna:
-    return "Savanna";
-  case VCL_biome_t::savanna_plateau:
-    return "Savanna Plateau";
-  case VCL_biome_t::windswept_hills:
-    return "Windswept Hills";
-  case VCL_biome_t::windswept_gravelly_hills:
-    return "Windswept Gravelly Hills";
-  case VCL_biome_t::windswept_forest:
-    return "Windswept Forest";
-  case VCL_biome_t::windswept_savanna:
-    return "Windswept Savanna";
-  case VCL_biome_t::jungle:
-    return "Jungle";
-  case VCL_biome_t::sparse_jungle:
-    return "Sparse Jungle";
-  case VCL_biome_t::bamboo_jungle:
-    return "Bamboo Jungle";
-  case VCL_biome_t::badlands:
-    return "Badlands";
-  case VCL_biome_t::eroded_badlands:
-    return "Eroded Badlands";
-  case VCL_biome_t::wooded_badlands:
-    return "Wooded Badlands";
-  case VCL_biome_t::meadow:
-    return "Meadow";
-  case VCL_biome_t::grove:
-    return "Grove";
-  case VCL_biome_t::snowy_slopes:
-    return "Snowy Slopes";
-  case VCL_biome_t::frozen_peaks:
-    return "Frozen Peaks";
-  case VCL_biome_t::jagged_peaks:
-    return "Jagged Peaks";
-  case VCL_biome_t::stony_peaks:
-    return "Stony Peaks";
-  case VCL_biome_t::river:
-    return "River";
-  case VCL_biome_t::frozen_river:
-    return "Frozen River";
-  case VCL_biome_t::beach:
-    return "Beach";
-  case VCL_biome_t::snowy_beach:
-    return "Snowy Beach";
-  case VCL_biome_t::stony_shore:
-    return "Stony Shore";
-  case VCL_biome_t::warm_ocean:
-    return "Warm Ocean";
-  case VCL_biome_t::lukewarm_ocean:
-    return "Lukewarm Ocean";
-  case VCL_biome_t::deep_lukewarm_ocean:
-    return "Deep Lukewarm Ocean";
-  case VCL_biome_t::ocean:
-    return "Ocean";
-  case VCL_biome_t::deep_ocean:
-    return "Deep Ocean";
-  case VCL_biome_t::cold_ocean:
-    return "Cold Ocean";
-  case VCL_biome_t::deep_cold_ocean:
-    return "Deep Cold Ocean";
-  case VCL_biome_t::frozen_ocean:
-    return "Frozen Ocean";
-  case VCL_biome_t::deep_frozen_ocean:
-    return "Deep Frozen Ocean";
-  case VCL_biome_t::mushroom_fields:
-    return "Mushroom Fields";
-  case VCL_biome_t::dripstone_caves:
-    return "Dripstone Caves";
-  case VCL_biome_t::lush_caves:
-    return "Lush Caves";
-  case VCL_biome_t::deep_dark:
-    return "Deep Dark";
-  case VCL_biome_t::nether_wastes:
-    return "Nether Wastes";
-  case VCL_biome_t::warped_forest:
-    return "Warped Forest";
-  case VCL_biome_t::crimson_forest:
-    return "Crimson Forest";
-  case VCL_biome_t::soul_sand_valley:
-    return "Soul Sand Valley";
-  case VCL_biome_t::basalt_deltas:
-    return "Basalt Deltas";
-  case VCL_biome_t::the_end:
-    return "The End";
-  case VCL_biome_t::end_highlands:
-    return "End Highlands";
-  case VCL_biome_t::end_midlands:
-    return "End Midlands";
-  case VCL_biome_t::small_end_islands:
-    return "Small End Islands";
-  case VCL_biome_t::end_barrens:
-    return "End Barrens";
-  case VCL_biome_t::cherry_grove:
-    return "Cherry Grove";
+    case VCL_biome_t::the_void:
+      return "The Void";
+    case VCL_biome_t::plains:
+      return "Plains";
+    case VCL_biome_t::sunflower_plains:
+      return "Sunflower Plains";
+    case VCL_biome_t::snowy_plains:
+      return "Snowy Plains";
+    case VCL_biome_t::ice_spikes:
+      return "Ice Spikes";
+    case VCL_biome_t::desert:
+      return "Desert";
+    case VCL_biome_t::swamp:
+      return "Swamp";
+    case VCL_biome_t::mangrove_swamp:
+      return "Mangrove Swamp";
+    case VCL_biome_t::forest:
+      return "Forest";
+    case VCL_biome_t::flower_forest:
+      return "Flower Forest";
+    case VCL_biome_t::birch_forest:
+      return "Birch Forest";
+    case VCL_biome_t::dark_forest:
+      return "Dark Forest";
+    case VCL_biome_t::old_growth_birch_forest:
+      return "Old Growth Birch Forest";
+    case VCL_biome_t::old_growth_pine_taiga:
+      return "Old Growth Pine Taiga";
+    case VCL_biome_t::old_growth_spruce_taiga:
+      return "Old Growth Spruce Taiga";
+    case VCL_biome_t::taiga:
+      return "Taiga";
+    case VCL_biome_t::snowy_taiga:
+      return "Snowy Taiga";
+    case VCL_biome_t::savanna:
+      return "Savanna";
+    case VCL_biome_t::savanna_plateau:
+      return "Savanna Plateau";
+    case VCL_biome_t::windswept_hills:
+      return "Windswept Hills";
+    case VCL_biome_t::windswept_gravelly_hills:
+      return "Windswept Gravelly Hills";
+    case VCL_biome_t::windswept_forest:
+      return "Windswept Forest";
+    case VCL_biome_t::windswept_savanna:
+      return "Windswept Savanna";
+    case VCL_biome_t::jungle:
+      return "Jungle";
+    case VCL_biome_t::sparse_jungle:
+      return "Sparse Jungle";
+    case VCL_biome_t::bamboo_jungle:
+      return "Bamboo Jungle";
+    case VCL_biome_t::badlands:
+      return "Badlands";
+    case VCL_biome_t::eroded_badlands:
+      return "Eroded Badlands";
+    case VCL_biome_t::wooded_badlands:
+      return "Wooded Badlands";
+    case VCL_biome_t::meadow:
+      return "Meadow";
+    case VCL_biome_t::grove:
+      return "Grove";
+    case VCL_biome_t::snowy_slopes:
+      return "Snowy Slopes";
+    case VCL_biome_t::frozen_peaks:
+      return "Frozen Peaks";
+    case VCL_biome_t::jagged_peaks:
+      return "Jagged Peaks";
+    case VCL_biome_t::stony_peaks:
+      return "Stony Peaks";
+    case VCL_biome_t::river:
+      return "River";
+    case VCL_biome_t::frozen_river:
+      return "Frozen River";
+    case VCL_biome_t::beach:
+      return "Beach";
+    case VCL_biome_t::snowy_beach:
+      return "Snowy Beach";
+    case VCL_biome_t::stony_shore:
+      return "Stony Shore";
+    case VCL_biome_t::warm_ocean:
+      return "Warm Ocean";
+    case VCL_biome_t::lukewarm_ocean:
+      return "Lukewarm Ocean";
+    case VCL_biome_t::deep_lukewarm_ocean:
+      return "Deep Lukewarm Ocean";
+    case VCL_biome_t::ocean:
+      return "Ocean";
+    case VCL_biome_t::deep_ocean:
+      return "Deep Ocean";
+    case VCL_biome_t::cold_ocean:
+      return "Cold Ocean";
+    case VCL_biome_t::deep_cold_ocean:
+      return "Deep Cold Ocean";
+    case VCL_biome_t::frozen_ocean:
+      return "Frozen Ocean";
+    case VCL_biome_t::deep_frozen_ocean:
+      return "Deep Frozen Ocean";
+    case VCL_biome_t::mushroom_fields:
+      return "Mushroom Fields";
+    case VCL_biome_t::dripstone_caves:
+      return "Dripstone Caves";
+    case VCL_biome_t::lush_caves:
+      return "Lush Caves";
+    case VCL_biome_t::deep_dark:
+      return "Deep Dark";
+    case VCL_biome_t::nether_wastes:
+      return "Nether Wastes";
+    case VCL_biome_t::warped_forest:
+      return "Warped Forest";
+    case VCL_biome_t::crimson_forest:
+      return "Crimson Forest";
+    case VCL_biome_t::soul_sand_valley:
+      return "Soul Sand Valley";
+    case VCL_biome_t::basalt_deltas:
+      return "Basalt Deltas";
+    case VCL_biome_t::the_end:
+      return "The End";
+    case VCL_biome_t::end_highlands:
+      return "End Highlands";
+    case VCL_biome_t::end_midlands:
+      return "End Midlands";
+    case VCL_biome_t::small_end_islands:
+      return "Small End Islands";
+    case VCL_biome_t::end_barrens:
+      return "End Barrens";
+    case VCL_biome_t::cherry_grove:
+      return "Cherry Grove";
   }
 
   return "Unamed";
@@ -1428,4 +1469,158 @@ VCL_EXPORT_FUN uint32_t VCL_locate_colormap(const VCL_resource_pack *rp,
   }
 
   return rp->standard_color(info, !is_grass);
+}
+
+class VCL_preset {
+ public:
+  std::unordered_set<std::string> ids;
+  std::unordered_set<VCL_block_class_t> classes;
+};
+
+void write_to_string_deliver(std::string_view sv,
+                             VCL_string_deliver *strp) noexcept {
+  if (strp == nullptr) {
+    return;
+  }
+  if (strp->data == nullptr || strp->capacity <= 0) {
+    return;
+  }
+
+  const size_t written_bytes = std::min(sv.size(), strp->capacity - 1);
+  memcpy(strp->data, sv.data(), written_bytes);
+  strp->size = written_bytes;
+  strp->data[strp->capacity - 1] = '\0';
+}
+
+#include <json.hpp>
+#include <fstream>
+using njson = nlohmann::json;
+
+VCL_EXPORT VCL_preset *VCL_create_preset() { return new VCL_preset{}; }
+VCL_EXPORT VCL_preset *VCL_load_preset(const char *filename,
+                                       VCL_string_deliver *error) {
+  write_to_string_deliver("", error);
+  njson block_ids;
+  njson block_classes;
+  try {
+    std::ifstream ifs{filename};
+    auto nj = njson::parse(ifs, nullptr, true, true);
+    block_ids = std::move(nj.at("block_ids"));
+    block_classes = std::move(nj.at("block_classes"));
+  } catch (std::exception &e) {
+    auto err = fmt::format("Exception occurred when parsing {}, detail: {}",
+                           filename, e.what());
+    write_to_string_deliver(err, error);
+    return nullptr;
+  }
+
+  VCL_preset *p = new VCL_preset{};
+  p->ids.reserve(block_ids.size());
+
+  for (auto &pair : block_ids.items()) {
+    p->ids.emplace(std::move(pair.key()));
+  }
+  for (auto &pair : block_classes.items()) {
+    auto cls = magic_enum::enum_cast<VCL_block_class_t>(pair.key());
+    if (!cls.has_value()) {
+      auto err = fmt::format(
+          "Invalid block class \"{}\" can not be converted to "
+          "VCL_block_class_t",
+          pair.key());
+      write_to_string_deliver(err, error);
+      delete p;
+      return nullptr;
+    }
+    p->classes.emplace(cls.value());
+  }
+  return p;
+}
+
+VCL_EXPORT bool VCL_save_preset(const VCL_preset *p, const char *filename,
+                                VCL_string_deliver *error) {
+  write_to_string_deliver("", error);
+  njson nj;
+  {
+    njson classes, ids;
+    for (const auto &id : p->ids) {
+      ids.emplace(id, njson::object_t{});
+    }
+    for (const auto cls : p->classes) {
+      classes.emplace(magic_enum::enum_name(cls), njson::object_t{});
+    }
+    nj.emplace("block_ids", std::move(ids));
+    nj.emplace("block_classes", std::move(classes));
+  }
+
+  std::ofstream ofs{filename};
+  if (!ofs) {
+    write_to_string_deliver(fmt::format("Failed to open/create {}", filename),
+                            error);
+    return false;
+  }
+  ofs << nj.dump(2);
+  ofs.close();
+  return true;
+}
+
+VCL_EXPORT void VCL_destroy_preset(VCL_preset *p) { delete p; }
+
+VCL_EXPORT bool VCL_preset_contains_id(const VCL_preset *p, const char *id) {
+  return p->ids.contains(id);
+}
+
+VCL_EXPORT void VCL_preset_emplace_id(VCL_preset *p, const char *id) {
+  p->ids.emplace(id);
+}
+
+VCL_EXPORT bool VCL_preset_contains_class(const VCL_preset *p,
+                                          VCL_block_class_t cls) {
+  return p->classes.contains(cls);
+}
+
+VCL_EXPORT void VCL_preset_emplace_class(VCL_preset *p, VCL_block_class_t cls) {
+  p->classes.emplace(cls);
+}
+
+VCL_EXPORT void VCL_preset_clear(VCL_preset *p) {
+  p->ids.clear();
+  p->classes.clear();
+}
+
+VCL_EXPORT size_t VCL_preset_num_ids(const VCL_preset *p) {
+  return p->ids.size();
+}
+
+VCL_EXPORT size_t VCL_preset_get_ids(const VCL_preset *p, const char **id_dest,
+                                     size_t capacity) {
+  size_t written_num{0};
+
+  for (const auto &pair : p->ids) {
+    if (capacity <= written_num) {
+      break;
+    }
+
+    id_dest[written_num] = pair.c_str();
+    written_num++;
+  }
+  return written_num;
+}
+
+VCL_EXPORT size_t VCL_preset_num_classes(const VCL_preset *p) {
+  return p->classes.size();
+}
+
+VCL_EXPORT size_t VCL_preset_get_classes(const VCL_preset *p,
+                                         VCL_block_class_t *class_dest,
+                                         size_t capacity) {
+  size_t written_num{0};
+  for (const auto cls : p->classes) {
+    if (capacity <= written_num) {
+      break;
+    }
+
+    class_dest[written_num] = cls;
+    written_num++;
+  }
+  return written_num;
 }

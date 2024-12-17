@@ -78,10 +78,13 @@ class VCWind : public QMainWindow {
   // for all pages
   Ui::VCWind *ui;
   VCL_Kernel *const kernel{nullptr};
+
   // for page 0
   // VCL_resource_pack *rp{nullptr};
   // VCL_block_state_list *bsl{nullptr};
   // bool is_basical_colorset_changed{true};
+  QByteArray basical_option_hash_prev{""};
+  QByteArray allowed_option_hash_prev{""};
 
   // for page 1
   std::map<VCL_block_class_t, VC_block_class *> map_VC_block_class{};
@@ -128,6 +131,9 @@ class VCWind : public QMainWindow {
   // create and set this->bsl
   [[nodiscard]] static VCL_block_state_list *create_block_state_list(
       const basic_colorset_option &opt) noexcept;
+
+  void update_hash_basic(const basic_colorset_option &opt) noexcept;
+  void update_hash_allowed(const allowed_colorset_option &opt) noexcept;
 
   // receive current selected version from ui
   SCL_gameVersion current_selected_version() const noexcept;
@@ -186,6 +192,9 @@ class VCWind : public QMainWindow {
 
   void flush_export_tabel() noexcept;
 
+  [[nodiscard]] std::unordered_map<std::string_view, QCheckBox *>
+  id_blockclass_map() noexcept;
+
   static constexpr int export_col_filename = 0;
   static constexpr int export_col_imagesize = 1;
   static constexpr int export_col_lite = 2;
@@ -212,11 +221,13 @@ class VCWind : public QMainWindow {
   // for all pages ------------------------------------------
 
   void on_ac_flush_warnings_triggered() noexcept;
+  void on_ac_export_test_schem_triggered() noexcept;
 
   // auto connected
   void on_tabWidget_main_currentChanged(int page) noexcept;
 
   // auto connected
+  void on_ac_tutorial_triggered() noexcept;
   void on_ac_about_VisualCraft_triggered() noexcept;
   void on_ac_contact_bilibili_triggered() noexcept;
   void on_ac_contact_github_repo_triggered() noexcept;
@@ -260,8 +271,12 @@ class VCWind : public QMainWindow {
   // auto connected
   void on_pb_custom_select_clicked() noexcept;
 
+  void on_pb_load_preset_clicked() noexcept;
+  void on_pb_save_preset_clicked() noexcept;
+
   // manually connected
   void setup_block_widgets() noexcept;
+
   // void when_allowed_colorset_changed() noexcept;
   //  for page 2 ------------------------------------------
 

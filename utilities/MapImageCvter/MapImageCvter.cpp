@@ -24,11 +24,17 @@ This file is part of SlopeCraft.
 
 #include <ExternalConverters/ExternalConverterStaticInterface.h>
 #include <ExternalConverters/GAConverter/GAConverter.h>
+#include <fstream>
+#include <cereal/archives/binary.hpp>
+#include <seralize_funs.hpp>
 
 using namespace libImageCvt;
 
-libMapImageCvt::MapImageCvter::MapImageCvter()
-    : gacvter(new GACvter::GAConverter) {}
+libMapImageCvt::MapImageCvter::MapImageCvter(
+    const Base_t::basic_colorset_t &basic,
+    const Base_t::allowed_colorset_t &allowed)
+    : libImageCvt::ImageCvter<true>{basic, allowed},
+      gacvter(new GACvter::GAConverter) {}
 
 void libMapImageCvt::MapImageCvter::convert_image(
     const ::SCL_convertAlgo algo, bool dither,
@@ -67,4 +73,73 @@ void libMapImageCvt::MapImageCvter::convert_image(
   Base_t::convert_image(::SCL_convertAlgo::RGB_Better, dither);
 
   this->_raw_image = raw_image_cache;
+}
+
+bool libMapImageCvt::MapImageCvter::save_cache(
+    const char *filename) const noexcept {
+  std::ofstream ofs{filename, std::ios::binary};
+  if (!ofs) {
+    return false;
+  }
+
+  {
+    cereal::BinaryOutputArchive boa{ofs};
+
+    boa(*this);
+  }
+
+  ofs.close();
+
+  return true;
+}
+
+bool libMapImageCvt::MapImageCvter::examine_cache(
+    const char *filename, uint64_t expected_task_hash,
+    MapImageCvter *itermediate) const noexcept {
+  std::ifstream ifs{filename, std::ios::binary};
+  if (!ifs) {  // cache file not exist
+    return false;
+  }
+  MapImageCvter im{this->basic_colorset, this->allowed_colorset};
+
+  try {
+    cereal::BinaryInputArchive bia{ifs};
+    bia(im);
+  } catch (...) {  // the cache is broken
+    return false;
+  }
+
+  if (im.task_hash() != expected_task_hash) {  // the cache may be modified
+    return false;
+  }
+
+  if (itermediate != nullptr) {
+    itermediate->load_from_itermediate(std::move(im));
+  }
+
+  return true;
+}
+
+bool libMapImageCvt::MapImageCvter::load_cache(
+    const char *filename, uint64_t expected_task_hash) noexcept {
+  MapImageCvter temp{this->basic_colorset, this->allowed_colorset};
+  if (!this->examine_cache(filename, expected_task_hash, &temp)) {
+    return false;
+  }
+
+  this->load_from_itermediate(std::move(temp));
+
+  assert(this->_raw_image.rows() == this->_dithered_image.rows());
+  assert(this->_raw_image.cols() == this->_dithered_image.cols());
+  return true;
+}
+
+bool libMapImageCvt::MapImageCvter::load_cache(const char *filename) noexcept {
+  MapImageCvter temp{this->basic_colorset, this->allowed_colorset};
+
+  this->load_from_itermediate(std::move(temp));
+
+  assert(this->_raw_image.rows() == this->_dithered_image.rows());
+  assert(this->_raw_image.cols() == this->_dithered_image.cols());
+  return true;
 }

@@ -20,55 +20,111 @@ This file is part of SlopeCraft.
     bilibili:https://space.bilibili.com/351429231
 */
 
-#include <cpuid.h>
 #include <omp.h>
 
-#include <QMessageBox>
 #include <iostream>
 #include <thread>
 
+#include <QMessageBox>
+#include <QProcess>
 #include "VCWind.h"
 #include "ui_VCWind.h"
 
-std::string get_cpu_name(bool &error) noexcept {
-  int buffer[5];
-  uint8_t *const buffer_cptr = reinterpret_cast<uint8_t *>(buffer);
-  constexpr uint32_t input[3] = {0x80000002, 0x80000003, 0x80000004};
+QString get_cpu_name(bool &error) noexcept {
+  QProcess proc{0};
+  error = true;
 
-  char str[1024] = "";
+#ifdef WIN32
+  const char *command = "wmic cpu get name";
+#elif defined(__linux__)
+  const char *command = "sh -c \"cat /proc/cpuinfo | grep name\"";
+#elif defined(__APPLE__)
+  const char * command="sysctl machdep.cpu.brand_string";
+#else
+#warning Unknown OS
+  const char * command=nullptr;
+  return {};
+#endif
 
-  error = false;
-  for (auto i : input) {
-    memset(buffer, 0, sizeof(buffer));
-    try {
-      __cpuid(i, buffer[0], buffer[1], buffer[2], buffer[3]);
-    } catch (std::exception &e) {
-      strcpy(str, "Instruction cpuid failed. Detail : ");
-      strcpy(str, e.what());
-      error = true;
-      return str;
-    }
-    if constexpr (false) {
-      for (size_t o = 0; o < 4 * sizeof(uint32_t); o++) {
-        std::cout << (int)buffer_cptr[o] << ", ";
-      }
-      std::cout << std::endl;
-    }
-
-    strcat(str, reinterpret_cast<char *>(buffer_cptr));
+  proc.startCommand(command);
+  if (!proc.waitForStarted()) {
+    return {};
   }
-  return str;
+  if (!proc.waitForFinished()) {
+    return {};
+  }
+
+  QString output = QString::fromUtf8(proc.readAllStandardOutput());
+
+#ifdef WIN32
+  output = output.remove(QChar{'\r'});
+  auto splitted = output.split('\n');
+  if (splitted.size() < 2) {
+    return {};
+  }
+
+  if (splitted[0].remove(QChar{' '}) != QStringLiteral("Name")) {
+    return {};
+  }
+
+  const auto cpu_name = splitted[1];
+
+#elif defined(__linux__)
+
+  output.remove('\t');
+
+  auto spilitted = output.split('\n');
+  if (spilitted.size() <= 0) {
+    return {};
+  }
+  const auto line0 = spilitted[0];
+  if (!line0.contains(':')) {
+    return {};
+  }
+  auto line0_splitted = line0.split(':');
+  if (line0_splitted.size() != 2) {
+    return {};
+  }
+  if (line0_splitted[0].remove(' ') != "modelname") {
+    return {};
+  }
+  const auto cpu_name = line0_splitted[1];
+
+#elif defined(__APPLE__)
+  output.remove('\n');
+  auto split_out=output.split(':');
+  if (split_out.size()<2) {
+    return {};
+  }
+  if (split_out[0]!="machdep.cpu.brand_string") {
+    return {};
+  }
+  auto cpu_name=split_out[1];
+  cpu_name.remove('\t');
+  while(cpu_name.front()==' ') {
+    cpu_name.removeFirst();
+  }
+  while(cpu_name.back()==' ') {
+    cpu_name.removeLast();
+  }
+#else
+#warning "Unknown OS"
+  QString cpu_name{};
+#endif
+  error = false;
+  return cpu_name;
 }
 
 void VCWind::refresh_gpu_info() noexcept {
-  this->ui->sb_threads->setValue(std::thread::hardware_concurrency());
+  this->ui->sb_threads->setValue((int)std::thread::hardware_concurrency());
 
   this->ui->tw_gpu->clear();
   this->ui->combobox_select_device->clear();
 
   {
     bool error = false;
-    QString text("CPU : " + QString::fromUtf8(get_cpu_name(error)));
+    QString text("CPU : " + get_cpu_name(error));
+    // QString text("CPU : " +);
     QTreeWidgetItem *cpu = new QTreeWidgetItem;
     cpu->setText(0, text);
     if (error) {
@@ -93,7 +149,7 @@ void VCWind::refresh_gpu_info() noexcept {
     QString platname{};
     if (plat == nullptr) {
       platname =
-          VCWind::tr("无法获取platform信息. 请检查驱动. OpenCL错误码: %1.")
+          VCWind::tr("无法获取 platform 信息。请检查驱动。OpenCL 错误码：%1.")
               .arg(errcode);
     } else {
       platname = QString::fromLocal8Bit(VCL_get_platform_name(plat));
@@ -116,7 +172,7 @@ void VCWind::refresh_gpu_info() noexcept {
       QString devicename{};
       if (dev == nullptr) {
         devicename =
-            VCWind::tr("无法获取device信息. 请检查驱动. OpenCL错误码: %1")
+            VCWind::tr("无法获取 device 信息。请检查驱动。OpenCL 错误码：%1")
                 .arg(errcode);
       } else {
         devicename = QString::fromLocal8Bit(VCL_get_device_name(dev));
@@ -127,7 +183,9 @@ void VCWind::refresh_gpu_info() noexcept {
 
       twi->addChild(twi_device);
 
-      this->ui->combobox_select_device->addItem(devicename, QPoint(pid, did));
+      this->ui->combobox_select_device->addItem(
+          QStringLiteral("%1 / %2").arg(platname, devicename),
+          QPoint(pid, did));
 
       VCL_release_device(dev);
     }
@@ -173,11 +231,14 @@ void VCWind::on_combobox_select_device_currentIndexChanged(int idx) noexcept {
 
   if (!err.isEmpty()) {
     auto ret = QMessageBox::critical(
-        this, VCWind::tr("设置计算设备失败"), err,
+        this, VCWind::tr("设置计算设备失败"),
+        tr("%1\n\n这不是一个致命错误，您可以选择其他的显卡，或者只使用 CPU "
+           "计算。点击 Ignore 将忽略这个错误，点击 Close 将关闭 VisualCraft")
+            .arg(err),
         QMessageBox::StandardButtons{QMessageBox::StandardButton::Close,
                                      QMessageBox::StandardButton::Ignore});
     if (ret == QMessageBox::StandardButton::Close) {
-      abort();
+      exit(1);
     }
   }
 }
@@ -197,22 +258,33 @@ QString VCWind::update_gpu_device(QPoint current_choice) noexcept {
 
   VCL_GPU_Platform *plat = VCL_get_platform(current_choice.x());
   if (plat == nullptr) {
-    return VCWind::tr("创建GPU平台失败，平台序号为%1，设备序号为%2")
+    return VCWind::tr("创建 GPU 平台失败，平台序号为%1，设备序号为%2")
         .arg(current_choice.x())
         .arg(current_choice.y());
   }
 
   VCL_GPU_Device *dev = VCL_get_device(plat, current_choice.y());
   if (dev == nullptr) {
-    return VCWind::tr("创建GPU设备失败，平台序号为%1，设备序号为%2")
+    return VCWind::tr("创建 GPU 设备失败，平台序号为%1，设备序号为%2")
         .arg(current_choice.x())
         .arg(current_choice.y());
   }
-
-  if (!this->kernel->set_gpu_resource(plat, dev)) {
-    return VCWind::tr("设置GPU设备失败。，平台序号为%1，设备序号为%2")
-        .arg(current_choice.x())
-        .arg(current_choice.y());
+  {
+    std::string error_msg;
+    error_msg.resize(4096);
+    VCL_Kernel::gpu_options gpu_options;
+    VCL_string_deliver s{
+        .data = error_msg.data(), .size = 0, .capacity = error_msg.size()};
+    gpu_options.error_message = &s;
+    if (!this->kernel->set_gpu_resource(plat, dev, gpu_options)) {
+      error_msg.resize(s.size);
+      return VCWind::tr(
+                 "设置 GPU "
+                 "设备失败。平台序号为%1，设备序号为%2，详细错误信息：\n%3")
+          .arg(current_choice.x())
+          .arg(current_choice.y())
+          .arg(error_msg.data());
+    }
   }
 
   VCL_release_device(dev);

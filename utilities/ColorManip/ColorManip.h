@@ -24,6 +24,8 @@ This file is part of SlopeCraft.
 #define COLORMANIP_COLORMANIP_H
 
 #include <stdint.h>
+#include <span>
+#include <array>
 // #include <Eigen/Dense>
 
 using ARGB = uint32_t;
@@ -70,5 +72,26 @@ float color_diff_RGB_plus(const float r1, const float g1, const float b1,
 
 float color_diff_HSV(float h1, float s1, float v1, float h2, float s2,
                      float v2) noexcept;
+
+void colordiff_RGB_batch(std::span<const float> r1, std::span<const float> g1,
+                         std::span<const float> b1,
+                         std::span<const float, 3> rgb2,
+                         std::span<float> dest) noexcept;
+
+void colordiff_RGBplus_batch(std::span<const float> r1,
+                             std::span<const float> g1,
+                             std::span<const float> b1,
+                             std::span<const float, 3> rgb2,
+                             std::span<float> dest) noexcept;
+
+void colordiff_HSV_batch(std::span<const float> h1, std::span<const float> s1,
+                         std::span<const float> v1,
+                         std::span<const float, 3> hsv2,
+                         std::span<float> dest) noexcept;
+
+void colordiff_Lab94_batch(std::span<const float> l1, std::span<const float> a1,
+                           std::span<const float> b1,
+                           std::span<const float, 3> lab2,
+                           std::span<float> dest) noexcept;
 
 #endif

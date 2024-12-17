@@ -20,212 +20,179 @@ This file is part of SlopeCraft.
     bilibili:https://space.bilibili.com/351429231
 */
 
-#include "SlopeCraftL.h"
-#include "TokiSlopeCraft.h"
-#include "simpleBlock.h"
 #include <fmt/format.h>
 #include <json.hpp>
+#include <tl/expected.hpp>
+#include <zip.h>
+#include <libpng_reader.h>
 
-using namespace SlopeCraft;
-
-// AbstractBlock *AbstractBlock::create() { return new simpleBlock; }
-
-void AbstractBlock::clear() noexcept {
-  setBurnable(false);
-  setDoGlow(false);
-  setEndermanPickable(false);
-  setId("minecraft:air");
-  setIdOld("");
-  setNeedGlass(false);
-  setVersion(0);
-  setNameZH("");
-  setNameEN("");
-  // setWallUseable(false);
-}
-
-Kernel::Kernel() {}
+#include "SlopeCraftL.h"
+#include "mc_block.h"
+#include "blocklist.h"
+#include "string_deliver.h"
+#include "color_table.h"
 
 using namespace SlopeCraft;
 
 extern "C" {
 
-SCL_EXPORT Kernel *SCL_createKernel() { return new TokiSlopeCraft; }
-SCL_EXPORT void SCL_destroyKernel(Kernel *k) {
-  delete static_cast<TokiSlopeCraft *>(k);
+SCL_EXPORT const float *SCL_get_rgb_basic_colorset_source() {
+  return SlopeCraft::RGBBasicSource;
 }
 
-SCL_EXPORT AbstractBlock *SCL_createBlock() { return new simpleBlock; }
-SCL_EXPORT void SCL_destroyBlock(AbstractBlock *b) { delete b; }
+SCL_EXPORT mc_block_interface *SCL_create_block() { return new mc_block; }
+SCL_EXPORT void SCL_destroy_block(mc_block_interface *b) { delete b; }
 
-std::pair<uint8_t, simpleBlock> parse_block(
-    const nlohmann::json &jo, std::string_view image_dir) noexcept(false) {
-  simpleBlock ret;
-  const int basecolor = jo.at("baseColor");
-  if (basecolor < 0 || basecolor >= 64) {
-    throw std::runtime_error{fmt::format("Invalid base color: {}", basecolor)};
-  }
+SCL_EXPORT block_list_interface *SCL_create_block_list(
+    const char *zip_filename, const block_list_create_info &option) {
+  auto [res, warnings] = create_block_list_from_file(zip_filename);
 
-  ret.id = jo.at("id");
-  ret.nameZH = jo.at("nameZH");
-  ret.nameEN = jo.at("nameEN");
-  {
-    std::string filename = image_dir.data();
-    filename += '/';
-    filename += jo.at("icon");
-    ret.imageFilename = filename;
-  }
-  ret.version = jo.at("version");
-  if (jo.contains("idOld")) {
-    ret.idOld = jo.at("idOld");
-  } else {
-    ret.idOld = ret.id;
-  }
-
-  if (jo.contains("endermanPickable")) {
-    ret.endermanPickable = jo.at("endermanPickable");
-  }
-
-  if (jo.contains("isGlowing")) {
-    ret.doGlow = jo.at("isGlowing");
-  }
-
-  if (jo.contains("burnable")) {
-    ret.burnable = jo.at("burnable");
-  }
-
-  if (jo.contains("needGlass")) {
-    ret.needGlass = jo.at("needGlass");
-  }
-
-  return {basecolor, ret};
-}
-
-BlockListInterface *impl_createBlockList(const char *filename,
-                                         const blockListOption &option,
-                                         std::string &errmsg) noexcept {
-  errmsg.reserve(4096);
-  errmsg.clear();
-
-  BlockList *bl = new BlockList;
-  using njson = nlohmann::json;
-  try {
-    std::ifstream ifs(filename);
-    njson jo = njson::parse(ifs, nullptr, true, true);
-
-    njson::array_t arr;
-    if (jo.contains("FixedBlocks")) {
-      arr = std::move(jo.at("FixedBlocks"));
-    } else {
-      arr = std::move(jo.at("CustomBlocks"));
-    }
-
-    // parse blocks
-    for (size_t idx = 0; idx < arr.size(); idx++) {
-      auto temp = parse_block(arr[idx], option.image_dir);
-
-      auto ptr = new simpleBlock;
-      *ptr = std::move(temp.second);
-      bl->blocks().emplace(ptr, temp.first);
-    }
-
-  } catch (std::exception &e) {
-    delete bl;
-    errmsg += fmt::format(
-        "Exception occured when parsing blocklist json: \"{}\"\n", e.what());
+  SlopeCraft::write_to_sd(option.warnings, warnings);
+  if (not res) {
+    SlopeCraft::write_to_sd(option.error, res.error());
     return nullptr;
   }
 
-  // load images
-  for (auto &pair : bl->blocks()) {
-    pair.first->image.resize(16, 16);
-    if (!option.callback_load_image(pair.first->getImageFilename(),
-                                    pair.first->image.data())) {
-      errmsg += fmt::format(
-          "Failed to load image \"{}\", this error will be ignored.\n",
-          pair.first->getImageFilename());
-      continue;
-    }
-    pair.first->image.transposeInPlace();
-  }
-
+  auto bl = new block_list{std::move(res.value())};
+  assert(bl not_eq nullptr);
   return bl;
 }
 
-SCL_EXPORT BlockListInterface *SCL_createBlockList(
-    const char *filename, const blockListOption &option) {
-  const bool can_write_err =
-      (option.errmsg != nullptr) && (option.errmsg_capacity > 0);
-
-  std::string errmsg;
-
-  BlockListInterface *ret = impl_createBlockList(filename, option, errmsg);
-
-  if (can_write_err) {
-    memset(option.errmsg, 0, option.errmsg_capacity);
-    const size_t copy_len = std::min(option.errmsg_capacity, errmsg.size());
-
-    memcpy(option.errmsg, errmsg.c_str(), copy_len);
-    if (option.errmsg_len_dest != nullptr) {
-      *option.errmsg_len_dest = copy_len;
-    }
-  } else {
-    if (option.errmsg_len_dest != nullptr) {
-      *option.errmsg_len_dest = 0;
-    }
+SCL_EXPORT block_list_interface *SCL_create_block_list_from_buffer(
+    const void *buffer, size_t buffer_bytes,
+    const block_list_create_info &option) {
+  if (buffer == nullptr or buffer_bytes <= 0) {
+    SlopeCraft::write_to_sd(
+        option.error,
+        "SCL_create_block_list_from_buffer met invalid value, either buffer is "
+        "nullptr or buffer size is 0");
+    return nullptr;
   }
 
-  return ret;
+  auto [res, warnings] = create_block_list_from_buffer(
+      {reinterpret_cast<const uint8_t *>(buffer), buffer_bytes});
+  SlopeCraft::write_to_sd(option.warnings, warnings);
+  if (not res) {
+    SlopeCraft::write_to_sd(option.error, res.error());
+    return nullptr;
+  }
+
+  auto bl = new block_list{std::move(res.value())};
+  assert(bl not_eq nullptr);
+  return bl;
 }
 
-SCL_EXPORT void SCL_destroyBlockList(BlockListInterface *) {}
+SCL_EXPORT void SCL_destroy_block_list(block_list_interface *bli) {
+  delete bli;
+}
 
-SCL_EXPORT AiCvterOpt *SCL_createAiCvterOpt() { return new AiCvterOpt; }
-void SCL_EXPORT SCL_destroyAiCvterOpt(AiCvterOpt *a) { delete a; }
+SCL_EXPORT GA_converter_option *SCL_createAiCvterOpt() {
+  return new GA_converter_option;
+}
+void SCL_EXPORT SCL_destroyAiCvterOpt(GA_converter_option *a) { delete a; }
 
-void SCL_EXPORT SCL_setPopSize(AiCvterOpt *a, unsigned int p) {
+void SCL_EXPORT SCL_setPopSize(GA_converter_option *a, unsigned int p) {
   a->popSize = p;
 }
-void SCL_EXPORT SCL_setMaxGeneration(AiCvterOpt *a, unsigned int p) {
+void SCL_EXPORT SCL_setMaxGeneration(GA_converter_option *a, unsigned int p) {
   a->maxGeneration = p;
 }
-void SCL_EXPORT SCL_setMaxFailTimes(AiCvterOpt *a, unsigned int p) {
+void SCL_EXPORT SCL_setMaxFailTimes(GA_converter_option *a, unsigned int p) {
   a->maxFailTimes = p;
 }
-void SCL_EXPORT SCL_setCrossoverProb(AiCvterOpt *a, double p) {
+void SCL_EXPORT SCL_setCrossoverProb(GA_converter_option *a, double p) {
   a->crossoverProb = p;
 }
-void SCL_EXPORT SCL_setMutationProb(AiCvterOpt *a, double p) {
+void SCL_EXPORT SCL_setMutationProb(GA_converter_option *a, double p) {
   a->mutationProb = p;
 }
 
-unsigned int SCL_EXPORT SCL_getPopSize(const AiCvterOpt *a) {
+unsigned int SCL_EXPORT SCL_getPopSize(const GA_converter_option *a) {
   return a->popSize;
 }
-unsigned int SCL_EXPORT SCL_getMaxGeneration(const AiCvterOpt *a) {
+unsigned int SCL_EXPORT SCL_getMaxGeneration(const GA_converter_option *a) {
   return a->maxGeneration;
 }
-unsigned int SCL_EXPORT SCL_getMaxFailTimes(const AiCvterOpt *a) {
+unsigned int SCL_EXPORT SCL_getMaxFailTimes(const GA_converter_option *a) {
   return a->maxFailTimes;
 }
-double SCL_EXPORT SCL_getCrossoverProb(const AiCvterOpt *a) {
+double SCL_EXPORT SCL_getCrossoverProb(const GA_converter_option *a) {
   return a->crossoverProb;
 }
-double SCL_EXPORT SCL_getMutationProb(const AiCvterOpt *a) {
+double SCL_EXPORT SCL_getMutationProb(const GA_converter_option *a) {
   return a->mutationProb;
 }
 
-SCL_EXPORT void SCL_getColorMapPtrs(const float **const rdata,
-                                    const float **const gdata,
-                                    const float **const bdata,
-                                    const uint8_t **mapdata, int *num) {
-  TokiSlopeCraft::getColorMapPtrs(rdata, gdata, bdata, mapdata, num);
+// SCL_EXPORT void SCL_getColorMapPtrs(const float **const rdata,
+//                                     const float **const gdata,
+//                                     const float **const bdata,
+//                                     const uint8_t **mapdata, int *num) {
+//   TokiSlopeCraft::getColorMapPtrs(rdata, gdata, bdata, mapdata, num);
+// }
+
+SCL_EXPORT const char *SCL_getSCLVersion() { return SC_VERSION_STR; }
+
+SCL_EXPORT SCL_gameVersion SCL_basecolor_version(uint8_t basecolor) {
+  if (basecolor <= 51) {
+    return SCL_gameVersion::ANCIENT;
+  }
+
+  if (basecolor <= 58) {
+    return SCL_gameVersion::MC16;
+  }
+
+  if (basecolor <= 61) {
+    return SCL_gameVersion::MC17;
+  }
+  return SCL_gameVersion::FUTURE;
 }
 
-SCL_EXPORT const float *SCL_getBasicColorMapPtrs() {
-  return TokiSlopeCraft::getBasicColorMapPtrs();
+SCL_EXPORT uint8_t SCL_maxBaseColor() { return 61; }
+
+SCL_EXPORT color_table *SCL_create_color_table(
+    const color_table_create_info &args) {
+  auto opt = color_table_impl::create(args);
+  if (opt) {
+    return new color_table_impl{std::move(opt.value())};
+  }
+  return nullptr;
 }
 
-SCL_EXPORT const char *SCL_getSCLVersion() {
-  return TokiSlopeCraft::getSCLVersion();
+SCL_EXPORT void SCL_destroy_color_table(color_table *c) { delete c; }
+
+SCL_EXPORT void SCL_destroy_converted_image(converted_image *c) { delete c; }
+SCL_EXPORT void SCL_destroy_structure_3D(structure_3D *s) { delete s; }
+
+SCL_EXPORT void SCL_get_base_color_ARGB32(uint32_t dest[64]) {
+  for (int bc = 0; bc < 64; bc++) {
+    const int row = bc + 128;
+    const std::array<float, 3> rgb_f32{
+        SlopeCraft::basic_colorset->RGB(row, 0),
+        SlopeCraft::basic_colorset->RGB(row, 1),
+        SlopeCraft::basic_colorset->RGB(row, 2),
+    };
+    std::array<uint8_t, 3> rgb_u8;
+    for (int i = 0; i < 3; ++i) {
+      assert(rgb_f32[i] >= 0);
+      assert(rgb_f32[i] <= 1.0);
+      rgb_u8[i] = rgb_f32[i] * 255;
+    }
+
+    dest[bc] = ARGB32(rgb_u8[0], rgb_u8[1], rgb_u8[2]);
+  }
 }
+
+// SCL_EXPORT int SCL_getBlockPalette(const mc_block_interface **blkpp,
+//                                    size_t capacity) {
+//   return TokiSlopeCraft::getBlockPalette(blkpp, capacity);
+// }
 }
+
+#include <ExternalConverters/ExternalConverterStaticInterface.h>
+namespace SlopeCraft {
+Eigen::Map<const Eigen::ArrayXf> BasicRGB4External(int channel) {
+  return Eigen::Map<const Eigen::ArrayXf>(
+      &SlopeCraft::basic_colorset->RGB_mat()(0, channel),
+      SlopeCraft::basic_colorset->color_count());
+}
+}  // namespace SlopeCraft

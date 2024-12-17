@@ -33,7 +33,7 @@ BlockBrowser::BlockBrowser(QWidget *parent)
     : QWidget(parent), ui(new Ui::BlockBrowser) {
   ui->setupUi(this);
 
-  this->fecth_content();
+  this->fetch_content();
 
   connect(this->ui->combobox_select_blk, &QComboBox::currentIndexChanged, this,
           &BlockBrowser::update_display);
@@ -52,8 +52,8 @@ const VCWind *BlockBrowser::parent() const noexcept {
   return dynamic_cast<const VCWind *>(QWidget::parentWidget());
 }
 
-void BlockBrowser::fecth_content() noexcept {
-  // fecth content for avaliable blocks
+void BlockBrowser::fetch_content() noexcept {
+  // fetch content for available blocks
   this->ui->combobox_select_blk->clear();
   this->ui->combobox_select_face->clear();
 
@@ -102,7 +102,7 @@ void BlockBrowser::fecth_content() noexcept {
         QVariant::fromValue((void *)blk));
   }
   {
-    this->ui->tw_version->setRowCount(19 - 12 + 1);
+    this->ui->tw_version->setRowCount(20 - 12 + 1);
     this->ui->tw_version->setColumnCount(2);
     // if (false)
     for (int r = 0; r < this->ui->tw_version->rowCount(); r++) {
@@ -141,7 +141,6 @@ void BlockBrowser::fecth_content() noexcept {
 }
 
 void BlockBrowser::update_display() noexcept {
-
   if (this->ui->combobox_select_blk->currentIndex() < 0) {
     return;
   }
@@ -266,7 +265,7 @@ void BlockBrowser::on_combobox_select_blk_all_currentIndexChanged(
 
   this->ui->tb_blockid_all->setText(VCL_get_block_id(blk));
 
-  for (int v = 12; v <= 19; v++) {
+  for (int v = 12; v <= 20; v++) {
     const int r = v - 12;
     QTableWidgetItem *qtwi = this->ui->tw_version->item(r, 1);
     assert(qtwi != nullptr);

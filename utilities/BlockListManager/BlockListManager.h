@@ -1,41 +1,13 @@
-/*
- Copyright © 2021-2023  TokiNoBug
-This file is part of SlopeCraft.
+#ifndef SLOPECRAFT_UTILITIES_BLOCKLISTMANAGER_BLOCKLISTMANAGER_H
+#define SLOPECRAFT_UTILITIES_BLOCKLISTMANAGER_BLOCKLISTMANAGER_H
 
-    SlopeCraft is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    SlopeCraft is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with SlopeCraft. If not, see <https://www.gnu.org/licenses/>.
-
-    Contact with me:
-    github:https://github.com/SlopeCraft/SlopeCraft
-    bilibili:https://space.bilibili.com/351429231
-*/
-
-#ifndef BLOCKLISTMANAGER_H
-#define BLOCKLISTMANAGER_H
-
-#include <queue>
 #include <memory>
-#include <QGroupBox>
-#include <QHBoxLayout>
-#include <QObject>
-#include <QRadioButton>
+#include <tl/expected.hpp>
 
-#include "../../SlopeCraftL/SlopeCraftL.h"
-
-#include "TokiBaseColor.h"
-#include "TokiBlock.h"
-
-#define DispLine qDebug() << "File = " << __FILE__ << " , Line = " << __LINE__;
+#include <QWidget>
+#include <SlopeCraftL.h>
+#include <QVBoxLayout>
+#include "BaseColor.h"
 
 struct basecolorOption {
   uint8_t baseColor{0xFF};
@@ -54,79 +26,118 @@ QString serialize_preset(const blockListPreset &preset) noexcept;
 
 class BlockListDeleter {
  public:
-  void operator()(SlopeCraft::BlockListInterface *ptr) noexcept {
-    SlopeCraft::SCL_destroyBlockList(ptr);
+  void operator()(SlopeCraft::block_list_interface *ptr) const noexcept {
+    SlopeCraft::SCL_destroy_block_list(ptr);
   }
 };
 
-class BlockListManager : public QObject {
-  Q_OBJECT
+struct selection {
+  std::vector<std::string> ids;
 
- public:
-  explicit BlockListManager(QHBoxLayout *_area, QObject *parent = nullptr);
-
-  ~BlockListManager();
-
-  bool setupFixedBlockList(const QString &filename,
-                           const QString &imgdir) noexcept;
-  bool setupCustomBlockList(const QString &filename,
-                            const QString &imgdir) noexcept;
-
- private:
-  bool impl_setupBlockList(const QString &filename, const QString &dirname,
-                           std::unique_ptr<SlopeCraft::BlockListInterface,
-                                           BlockListDeleter> &dst) noexcept;
-
- public:
-  void setSelected(uchar baseColor, ushort blockSeq);
-
-  void setEnabled(uchar baseColor, bool isEnable);
-
-  void setLabelColors(const QRgb *);
-
-  void setVersion(uchar);
-
-  void getEnableList(bool *) const;
-  void getSimpleBlockList(const SlopeCraft::AbstractBlock **) const;
-  std::vector<const SlopeCraft::AbstractBlock *> getSimpleBlockList() const;
-  std::vector<const TokiBlock *> getTokiBlockList() const;
-  std::vector<const QRadioButton *> getQRadioButtonList() const;
-  std::vector<ushort> toPreset() const;
-
-  void getTokiBaseColors(std::vector<const TokiBaseColor *> *) const;
-
-  int getBlockNum() const;
-  void getBlockPtrs(const SlopeCraft::AbstractBlock **, uint8_t *) const;
-
-  bool loadPreset(const blockListPreset &preset);
-
-  bool loadInternalPreset(const blockListPreset &preset) noexcept;
-
-  blockListPreset currentPreset() const noexcept;
-
- public slots:
-
- signals:
-  void translate(Language);
-  void switchToCustom() const;
-  void blockListChanged() const;
-
- private:
-  bool isApplyingPreset;
-  QHBoxLayout *area;
-  std::vector<TokiBaseColor *> tbcs;
-
-  std::unique_ptr<SlopeCraft::BlockListInterface, BlockListDeleter> BL_fixed{
-      nullptr};
-  std::unique_ptr<SlopeCraft::BlockListInterface, BlockListDeleter> BL_custom{
-      nullptr};
-
-  static const QString baseColorNames[64];
-
- private slots:
-  void receiveClicked() const;
+  [[nodiscard]] bool operator==(const selection &b) const noexcept {
+    if (this->ids.size() != b.ids.size()) {
+      return false;
+    }
+    for (size_t i = 0; i < this->ids.size(); i++) {
+      if (this->ids[i] != b.ids[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
 };
 
-bool isValidBlockInfo(const QJsonObject &);
+template <>
+struct std::hash<selection> {
+  uint64_t operator()(const selection &s) const noexcept;
+};
 
-#endif  // BLOCKLISTMANAGER_H
+class BlockListManager : public QWidget {
+  Q_OBJECT
+ private:
+  std::vector<std::unique_ptr<BaseColorWidget>> basecolor_widgets;
+  std::vector<
+      std::pair<QString, std::unique_ptr<SlopeCraft::block_list_interface,
+                                         BlockListDeleter>>>
+      blockslists;
+  std::function<SCL_gameVersion()> callback_get_version{nullptr};
+
+ public:
+  explicit BlockListManager(QWidget *parent = nullptr);
+  ~BlockListManager();
+
+  void setup_basecolors() noexcept;
+
+  bool add_blocklist(QString filename) noexcept;
+
+  tl::expected<size_t, QString> remove_blocklist(
+      QString blocklist_name) noexcept;
+
+  void finish_blocklist() noexcept;
+
+  void set_version_callback(
+      const std::function<SCL_gameVersion()> &cb) noexcept {
+    this->callback_get_version = cb;
+  }
+
+  SCL_gameVersion version() const noexcept {
+    return this->callback_get_version();
+  }
+
+  void when_version_updated() noexcept;
+
+  void when_lang_updated(SCL_language lang) noexcept {
+    for (auto &bcw : this->basecolor_widgets) {
+      bcw->update_lang(lang);
+    }
+  }
+
+  void select_block_by_callback(const select_callback_t &fun) noexcept {
+    for (auto &bcw : this->basecolor_widgets) {
+      bcw->select_by_callback(fun);
+    }
+  }
+
+  void get_blocklist(std::vector<uint8_t> &enable_list,
+                     std::vector<const SlopeCraft::mc_block_interface *>
+                         &block_list) const noexcept;
+
+  bool loadPreset(const blockListPreset &preset) noexcept;
+
+  blockListPreset to_preset() const noexcept;
+
+  size_t num_basecolor_widgets() const noexcept {
+    assert(this->basecolor_widgets.size() < 256);
+    return this->basecolor_widgets.size();
+  }
+
+  BaseColorWidget *basecolorwidget_at(size_t basecolor) noexcept {
+    return this->basecolor_widgets[basecolor].get();
+  }
+
+  const BaseColorWidget *basecolorwidget_at(size_t basecolor) const noexcept {
+    return this->basecolor_widgets[basecolor].get();
+  }
+
+  [[nodiscard]] selection current_selection() const noexcept;
+
+  [[nodiscard]] std::vector<
+      std::pair<QString, const SlopeCraft::block_list_interface *>>
+  get_block_lists() const noexcept {
+    std::vector<std::pair<QString, const SlopeCraft::block_list_interface *>>
+        ret;
+    for (auto &[name, list] : this->blockslists) {
+      ret.emplace_back(name, list.get());
+    }
+    return ret;
+  }
+
+ signals:
+  void changed();
+
+ private:
+  std::unique_ptr<SlopeCraft::block_list_interface, BlockListDeleter>
+  impl_addblocklist(const QByteArray &file_content) noexcept;
+};
+
+#endif  // SLOPECRAFT_UTILITIES_BLOCKLISTMANAGER_BLOCKLISTMANAGER_H

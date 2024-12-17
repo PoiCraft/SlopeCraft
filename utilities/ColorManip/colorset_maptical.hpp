@@ -37,7 +37,7 @@ This file is part of SlopeCraft.
 #endif
 
 class newtokicolor_base_maptical {
-public:
+ public:
   using TempVectorXf_t =
       Eigen::Array<float, Eigen::Dynamic, 1, Eigen::ColMajor, 256>;
 
@@ -48,33 +48,30 @@ public:
   // 记录与result的深度值不同的两个有损优化候选色（升序排列），Depth=3时无效
   std::array<uint8_t, 2> sideResult;
 
-  uint8_t Result{0}; // 最终调色结果
+  uint8_t Result{0};  // 最终调色结果
 
-public:
-  static bool needFindSide;
-  static std::array<uint8_t, 4> DepthCount;
-  // static ::SCL_convertAlgo convertAlgo;
+ public:
+  // static bool needFindSide;
+  // static std::array<uint8_t, 4> DepthCount;
+  //  static ::SCL_convertAlgo convertAlgo;
 
-public:
+ public:
   inline bool is_result_computed() const noexcept { return (Result != 0); }
 };
 
 class alignas(32) colorset_maptical_basic {
-private:
+ private:
   Eigen::Array<float, 256, 3> __rgb;
   Eigen::Array<float, 256, 3> __hsv;
   Eigen::Array<float, 256, 3> __lab;
   Eigen::Array<float, 256, 3> __xyz;
 
-public:
+ public:
   /// The default constructor is deleted
   colorset_maptical_basic() = delete;
   /// Construct from color source
   colorset_maptical_basic(const float *const rgbsrc) {
-    if (rgbsrc == nullptr) {
-      exit(1);
-      return;
-    }
+    assert(rgbsrc);
     memcpy(__rgb.data(), rgbsrc, sizeof(__rgb));
 
     for (int row = 0; row < 256; row++) {
@@ -117,20 +114,27 @@ public:
 };
 
 class alignas(32) colorset_maptical_allowed {
-public:
+ public:
   using color_col = Eigen::Array<float, 256, 1>;
   static constexpr uint8_t invalid_color_id = 0;
 
-private:
+ private:
   std::array<color_col, 3> __rgb;
   std::array<color_col, 3> __hsv;
   std::array<color_col, 3> __lab;
   std::array<color_col, 3> __xyz;
   Eigen::Array<uint8_t, 256, 1> __map;
   // std::array<uint8_t, 256> __map;
-  int _color_count;
+  int _color_count{0};
 
-public:
+  std::array<uint8_t, 4> depth_counter;
+
+ public:
+  bool need_find_side{false};
+  [[nodiscard]] const std::array<uint8_t, 4> &depth_count() const noexcept {
+    return this->depth_counter;
+  }
+
   inline int color_count() const noexcept { return _color_count; }
 
   inline float RGB(int r, int c) const noexcept {
@@ -192,11 +196,7 @@ public:
   inline const uint8_t *map_data() const noexcept { return __map.data(); }
 
   bool apply_allowed(const colorset_maptical_basic &src,
-                     const bool *const allow_list) noexcept {
-    if (allow_list == nullptr) {
-      return false;
-    }
-
+                     std::span<const bool, 256> allow_list) noexcept {
     const int new_color_count = allow_list_counter(allow_list);
 
     if (new_color_count <= 3) {
@@ -230,22 +230,22 @@ public:
         writeidx++;
       }
     }
-
-    newtokicolor_base_maptical::DepthCount.fill(0);
-    for (int idx = 0; idx < this->color_count(); idx++) {
+    this->depth_counter.fill(0);
+    for (int idx = 0; idx < new_color_count; idx++) {
       const uint8_t mapcolor = this->Map(idx);
       const uint8_t base = mapcolor >> 2;
       if (base != 0) {
         const uint8_t depth = mapcolor & 0b11;
-        newtokicolor_base_maptical::DepthCount[depth]++;
+        this->depth_counter[depth]++;
       }
     }
 
     return true;
   }
 
-private:
-  inline int allow_list_counter(const bool *const allow_list) const noexcept {
+ private:
+  inline int allow_list_counter(
+      std::span<const bool, 256> allow_list) const noexcept {
     int result = 0;
     for (int idx = 0; idx < 256; idx++) {
       const int base = (idx & 0b111111);
@@ -258,4 +258,4 @@ private:
   }
 };
 
-#endif // COLORMANIP_COLORSET_MAPTICAL_HPP
+#endif  // COLORMANIP_COLORSET_MAPTICAL_HPP

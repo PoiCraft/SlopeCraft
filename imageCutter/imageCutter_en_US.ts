@@ -97,12 +97,6 @@
         <translation>Select image</translation>
     </message>
     <message>
-        <location filename="CutterWind.cpp" line="54"/>
-        <location filename="CutterWind.cpp" line="89"/>
-        <source>图片(*.png *.bmp *.jpg *.tif)</source>
-        <translation>Images (*.png *.bmp *.jpg *.tif)</translation>
-    </message>
-    <message>
         <location filename="CutterWind.cpp" line="61"/>
         <source>打开图片失败</source>
         <translation>Failed to load image</translation>
@@ -121,6 +115,12 @@
         <location filename="CutterWind.cpp" line="113"/>
         <source>选择输出文件夹</source>
         <translation>Select output directory</translation>
+    </message>
+    <message>
+        <location filename="CutterWind.cpp" line="54"/>
+        <location filename="CutterWind.cpp" line="89"/>
+        <source>图片(*.png *.bmp *.jpg *.tif)</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 </TS>
